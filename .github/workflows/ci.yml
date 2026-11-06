@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Native deps (whisper.cpp, opus)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config libopus-dev
+      # No apt step: the runner image already has the clang, cmake and pkg-config whisper.cpp and
+      # opus build with, and the Azure apt mirror sometimes crawls at a few kB/s for 20+ minutes.
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
