@@ -209,6 +209,8 @@ async fn join(
 ) {
     let log = match manager.join(guild_id, channel).await {
         Ok(call) => {
+            // Reset before the handlers go on, so no speaker mapping that arrives first is wiped.
+            st.lock().unwrap().joined(channel);
             let mut call = call.lock().await;
             call.remove_all_global_events();
             let rx = Receiver {
@@ -219,7 +221,6 @@ async fn join(
             call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), rx.clone());
             call.add_global_event(CoreEvent::VoiceTick.into(), rx);
             call.mute(true).await.ok(); // it only listens
-            st.lock().unwrap().joined(channel);
             tracing::info!(%guild_id, %channel, "monitoring voice");
             Log::new(kind::MONITOR_JOINED, json!({}))
         }
