@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck deploy/steam-machine/*.sh
+      - run: shellcheck deploy/steam-machine/*.sh scripts/*.sh
       - run: deploy/steam-machine/test.sh
 
   # PRs build the image without pushing it, so a broken Dockerfile fails here instead of on main.
@@ -42,8 +42,12 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
+          load: true
+          tags: nicenovember:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static
+      - run: scripts/check-portable.sh nicenovember:ci
 
   # Only main publishes an image; the Steam Machine's update timer pulls :latest.
   publish:
@@ -63,13 +67,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Build, check it runs on CPUs without AVX-512, and only then push.
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          push: true
+          load: true
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static
+      - run: scripts/check-portable.sh "$IMAGE:latest"
+      - run: docker push "$IMAGE:latest" && docker push "$IMAGE:${{ github.sha }}"
