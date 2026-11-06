@@ -36,7 +36,12 @@ pub async fn status(ctx: Ctx<'_>) -> Result<()> {
     let _ = writeln!(
         bot,
         "**Version:** {}",
-        fmt_version(env!("CARGO_PKG_VERSION"), option_env!("GIT_SHA"))
+        fmt_version(
+            option_env!("VERSION")
+                .filter(|v| !v.is_empty())
+                .unwrap_or(env!("CARGO_PKG_VERSION")),
+            option_env!("GIT_SHA")
+        )
     );
     let _ = write!(
         bot,
