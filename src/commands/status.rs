@@ -33,7 +33,11 @@ pub async fn status(ctx: Ctx<'_>) -> Result<()> {
     if let Some(mb) = memory_mb() {
         let _ = writeln!(bot, "**Memory:** {mb:.1} MB");
     }
-    let _ = writeln!(bot, "**Version:** {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(
+        bot,
+        "**Version:** {}",
+        fmt_version(env!("CARGO_PKG_VERSION"), option_env!("GIT_SHA"))
+    );
     let _ = write!(
         bot,
         "**Voice (Whisper):** {} · **AI (Jev):** {}",
@@ -86,6 +90,17 @@ fn on_off(b: bool) -> &'static str {
     if b { "✅" } else { "❌" }
 }
 
+/// The crate version, plus a link to the commit when the image build passed one in.
+fn fmt_version(pkg: &str, sha: Option<&str>) -> String {
+    match sha.filter(|s| !s.is_empty()) {
+        Some(sha) => format!(
+            "{pkg} ([`{}`](https://github.com/SAUCE-2/NiceNovember/commit/{sha}))",
+            &sha[..sha.len().min(7)]
+        ),
+        None => pkg.to_owned(),
+    }
+}
+
 /// `93784` → `1d 2h 3m 4s`, dropping leading zero units.
 fn fmt_duration(secs: i64) -> String {
     let secs = secs.max(0);
@@ -130,5 +145,15 @@ mod tests {
         assert_eq!(fmt_duration(3_600), "1h 0m 0s");
         assert_eq!(fmt_duration(93_784), "1d 2h 3m 4s");
         assert_eq!(fmt_duration(-5), "0s");
+    }
+
+    #[test]
+    fn versions() {
+        assert_eq!(fmt_version("0.1.0", None), "0.1.0");
+        assert_eq!(fmt_version("0.1.0", Some("")), "0.1.0");
+        assert_eq!(
+            fmt_version("0.1.0", Some("faa6c9e1234")),
+            "0.1.0 ([`faa6c9e`](https://github.com/SAUCE-2/NiceNovember/commit/faa6c9e1234))"
+        );
     }
 }
