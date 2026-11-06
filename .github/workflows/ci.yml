@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push cancels the older run, so an older commit's slower publish can't overwrite :latest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

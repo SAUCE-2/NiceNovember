@@ -86,8 +86,9 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 ### 2. Run it on the Steam Machine
 
 The Steam Machine runs SteamOS, which ships rootless Podman. Watchtower can't update containers
-there, so the install script uses a systemd timer instead: every 2 minutes it pulls the image and
-recreates the bot if a new one was published. Run this in Desktop Mode's terminal (Konsole):
+there, so the install script runs the bot as a [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+service, `nicenovember.service`, and Podman's own `podman-auto-update.timer` checks every 2 minutes
+and restarts it if a new image was published. Run this in Desktop Mode's terminal (Konsole):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SAUCE-2/NiceNovember/main/deploy/steam-machine/install.sh | bash
@@ -110,15 +111,19 @@ podman logs -f nicenovember
 ```
 
 ```bash
-systemctl --user list-timers nicenovember-update.timer
+systemctl --user status nicenovember.service
+```
+
+```bash
+systemctl --user list-timers podman-auto-update.timer
 ```
 
 ```bash
 podman cp nicenovember:/data/nicenovember.db .
 ```
 
-The data lives in the `nicenovember-data` Podman volume, so it survives updates. The container uses
-`--restart=always` and `podman-restart.service` starts it again after a reboot.
+The data lives in the `nicenovember-data` Podman volume, so it survives updates. systemd restarts
+the bot if it exits and starts it after a reboot.
 
 If the pull fails with `unauthorized` or `denied`, the image on GHCR is private. Make it public in
 GitHub under the repo's **Packages → nicenovember → Package settings → Change visibility**.
@@ -126,7 +131,7 @@ GitHub under the repo's **Packages → nicenovember → Package settings → Cha
 ### Next to SpiritBot
 
 NiceNovember runs as its own container and doesn't touch SpiritBot's. Its container, volume and
-timer are all called `nicenovember`, while SpiritBot keeps its compose setup and
+service are all called `nicenovember`, while SpiritBot keeps its compose setup and
 `spiritbot-update.timer`. Two things to know:
 
 - **It needs its own Discord bot.** Create a second application (step 1 above) and use its token.
@@ -245,7 +250,7 @@ The live tests are ignored by default. With a Whisper model and a 16 kHz mono WA
 STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh cargo test -- --ignored --nocapture
 ```
 
-`deploy/steam-machine/test.sh` checks the install and update scripts against a fake Podman.
+`deploy/steam-machine/test.sh` checks the install script against a fake Podman and systemd.
 
 ### Where things are
 
@@ -257,7 +262,7 @@ STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh carg
 | `src/voice/monitor.rs` | Sitting in the monitored channel and turning speech into utterances |
 | `src/voice/segmenter.rs` | Cutting each speaker's audio into one segment per thing said |
 | `src/stats/` | The activity log, its capture of Discord events, and the export |
-| `deploy/steam-machine/` | Install and update scripts for rootless Podman + systemd |
+| `deploy/steam-machine/` | Install script for rootless Podman + systemd (Quadlet) |
 
 Made with the same stack as [SpiritBot](https://github.com/SAUCE-2/spritbot-slop). CI runs
 `cargo fmt`, `clippy`, tests and the deploy script tests on every PR, and builds the image.
