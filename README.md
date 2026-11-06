@@ -67,10 +67,10 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
-| `/stats user <user> [count]` | Aggregated stats for someone, plus their recent judged utterances |
-| `/stats summary` | How much has been logged, by kind (admin) |
-| `/stats export` | Download the activity log as gzipped JSON Lines (admin) |
-| `/stats wipe confirm:true [user]` | Delete logged activity, e.g. after testing (admin) |
+| `/stats <user> [count]` | Aggregated stats for someone, plus their recent judged utterances (posted in-channel) |
+| `/log summary` | How much has been logged, by kind (admin) |
+| `/log export` | Download the activity log as gzipped JSON Lines (admin) |
+| `/log wipe confirm:true [user]` | Delete logged activity, e.g. after testing (admin) |
 
 ## Self-hosting
 
@@ -209,7 +209,7 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `pardoned` | An admin ended a timeout early (`by`) |
 | `monitor_joined` / `monitor_failed` | The bot joined the monitored voice channel, or couldn't |
 
-To get the data out, run `/stats export`. It gives you a `.jsonl.gz` file with one JSON object per
+To get the data out, run `/log export`. It gives you a `.jsonl.gz` file with one JSON object per
 line. If it's over Discord's 10 MB upload limit, copy the database instead (see above) and query it
 with SQLite's JSON functions. Some ideas:
 
