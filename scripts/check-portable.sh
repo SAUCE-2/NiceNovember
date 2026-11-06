@@ -2,10 +2,18 @@
 # Run the image's bot, emulating a CPU without AVX-512 or AMX (QEMU's Haswell: AVX2 at most), up to
 # the point where it has loaded the Whisper model. Fails if it dies with an illegal instruction,
 # which is what a whisper.cpp tuned for the build machine does on the Steam Machine.
-# Usage: scripts/check-portable.sh IMAGE   (needs qemu-user-static installed on the host)
+# Usage: scripts/check-portable.sh IMAGE
 set -euo pipefail
 IMAGE=${1:?usage: $0 IMAGE}
-QEMU=$(command -v qemu-x86_64-static) || { echo "install qemu-user-static" >&2; exit 2; }
+
+# The static QEMU comes from Debian's CDN rather than the host's apt, since GitHub runners' Azure
+# Ubuntu mirror sometimes takes 8+ minutes for it.
+QEMU=$(mktemp)
+trap 'rm -f "$QEMU"' EXIT
+docker run --rm debian:bookworm-slim sh -c \
+  '{ apt-get update && apt-get install -y --no-install-recommends qemu-user-static; } >&2 && cat /usr/bin/qemu-x86_64-static' \
+  >"$QEMU"
+chmod 755 "$QEMU"
 
 set +e
 out=$(timeout 300 docker run --rm -v "$QEMU:/qemu:ro" --entrypoint /qemu \
