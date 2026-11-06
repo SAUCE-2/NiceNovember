@@ -4,8 +4,9 @@ A Discord bot that keeps November nice.
 
 The bot sits in your voice channel and listens. When a member with the participant role says
 something not nice to someone else in the call, they're timed out for 10 seconds and what they said
-is quoted in the announce channel. Chat messages are judged the same way. Nobody's exempt: members Discord won't
-let a bot time out (the owner, admins, anyone above the bot's role) get a forced timeout instead.
+is quoted in the announce channel. Chat messages are judged the same way. A timeout isn't Discord's
+own: the bot server-mutes and deafens them and deletes what they post, so nobody's exempt, not even
+the owner or admins.
 Everything that happens is logged, so you can build stats from it at the end of the month.
 
 ## Features
@@ -20,9 +21,9 @@ Everything that happens is logged, so you can build stats from it at the end of 
   reads differently from "shut up" aimed at someone.
 - **Public call-outs.** Each hostile message or sentence is posted to the announce channel as a
   quote, with who said it and where.
-- **Timeouts for everyone.** Native Discord timeouts where possible, forced ones otherwise. Both
-  are also enforced by the bot: until the timeout ends, the user's messages are deleted, their
-  reactions are removed, and they're server-muted in VC.
+- **Timeouts for everyone.** Enforced by the bot, not Discord's timeout: until the timeout ends,
+  the user's messages are deleted, their reactions are removed, and they're server-muted and
+  deafened in VC.
 - **Loads of metrics.** Every message, reaction, voice join, presence change, transcript, Jev score,
   timeout and pardon goes into an activity log you can export.
 
@@ -33,13 +34,12 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Who | Participants only (the participant role) | Participants in the monitored channel |
 | What's judged | Every new message (with the message it replies to), edits that change the text, and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
 | Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
-| Then | 10s timeout, quote in the announce channel, details in the log channel | Same, and server-muted until it ends |
+| Then | 10s timeout, quote in the announce channel, details in the log channel | Same, and server-muted and deafened until it ends |
 
-**Native or forced?** Discord won't let a bot time out the server owner, anyone with Administrator,
-or anyone whose top role is at or above the bot's. Those members get a forced timeout instead. Put
-the bot's role near the top of the role list so as many people as possible get the native kind.
-Either way the bot deletes their messages, removes their reactions and server-mutes them in VC, so
-the two behave the same. If someone leaves VC while muted, they're unmuted when they come back.
+**Why not Discord's timeout?** Discord won't let a bot time out the server owner, anyone with
+Administrator, or anyone above the bot's role, so the bot does it itself, the same for everyone: it
+deletes their messages, removes their reactions and server-mutes and deafens them in VC. If someone
+leaves VC while muted, they're unmuted and undeafened when they come back.
 
 ## Privacy
 
@@ -81,8 +81,6 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
    **Presence**, **Server Members** and **Message Content** intents, then copy the token.
 2. Invite the bot with the `bot` and `applications.commands` scopes and the **Administrator**
    permission.
-3. In Server Settings → Roles, drag the bot's role as high as you can (see
-   [native or forced](#how-it-works)).
 
 ### 2. Run it on the Steam Machine
 
@@ -197,8 +195,8 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
 | `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
-| `hostile` | Something hostile: what was `said`, `score`, timeout `method` (native/forced), `muted`, `announced` |
-| `timed_out` / `timeout_released` | Each timeout: `method`, `secs`, `until`, why a native one was refused; and when it was lifted |
+| `hostile` | Something hostile: what was `said`, `score`, `muted` (server-muted and deafened), `announced` |
+| `timed_out` / `timeout_released` | Each timeout: `secs`, `until`, `muted`; and when it was lifted |
 | `timeout_message` / `timeout_reaction` / `timeout_vc` | Tried to talk, react or join VC while timed out |
 | `pardoned` | An admin ended a timeout early (`by`) |
 | `monitor_joined` / `monitor_failed` | The bot joined the monitored voice channel, or couldn't |
@@ -220,9 +218,9 @@ FROM activity_log WHERE kind = 'judged' GROUP BY 1, 2 ORDER BY 3 DESC;
 SELECT user_id, SUM(json_extract(data, '$.audio_ms')) / 60000.0 FROM activity_log
 WHERE kind = 'heard' GROUP BY user_id ORDER BY 2 DESC;
 
--- Who'd have been timed out natively vs forced
-SELECT json_extract(data, '$.method'), COUNT(*) FROM activity_log
-WHERE kind = 'timed_out' GROUP BY 1;
+-- Most timeouts served in VC (server-muted and deafened)
+SELECT user_id, COUNT(*) FROM activity_log
+WHERE kind = 'timed_out' AND json_extract(data, '$.muted') GROUP BY user_id ORDER BY 2 DESC;
 ```
 
 ## Development
@@ -259,7 +257,7 @@ STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh carg
 |---|---|
 | `src/hostility.rs` | What counts as hostile (Jev's question), the call-out text, transcript cleanup |
 | `src/judge.rs` | Judge an utterance, then time out, announce and log |
-| `src/timeout.rs` | Native vs forced timeouts, enforcement, and the one release path |
+| `src/timeout.rs` | Timeouts: enforcement (delete, mute, deafen) and the one release path |
 | `src/voice/monitor.rs` | Sitting in the monitored channel and turning speech into utterances |
 | `src/voice/segmenter.rs` | Cutting each speaker's audio into one segment per thing said |
 | `src/stats/` | The activity log, its capture of Discord events, and the export |

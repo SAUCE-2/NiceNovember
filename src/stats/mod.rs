@@ -33,18 +33,18 @@ pub mod kind {
     pub const JUDGED: &str = "judged";
     /// Jev couldn't judge an utterance (not configured, or the call failed): `{source, said}`.
     pub const JUDGE_FAILED: &str = "judge_failed";
-    /// An utterance was hostile: `{source, said, score, threshold, message_id, method, muted,
-    /// announced}`.
+    /// An utterance was hostile: `{source, said, score, threshold, message_id, muted,
+    /// timeout_error, announced}`.
     pub const HOSTILE: &str = "hostile";
-    /// Someone was timed out: `{method, secs, until, reason, native_error, muted}`.
+    /// Someone was timed out: `{secs, until, reason, muted}` (`muted`: server-muted and deafened).
     pub const TIMED_OUT: &str = "timed_out";
-    /// A timeout ended and was lifted: `{method, unmuted, until}`.
+    /// A timeout ended and was lifted: `{unmuted, until}`.
     pub const TIMEOUT_RELEASED: &str = "timeout_released";
     /// A timed-out user's message was deleted: `{message_id, content, until}`.
     pub const TIMEOUT_MESSAGE: &str = "timeout_message";
     /// A timed-out user's reaction was removed: `{message_id, emoji}`.
     pub const TIMEOUT_REACTION: &str = "timeout_reaction";
-    /// A timed-out user was server-muted on joining VC: `{until}`.
+    /// A timed-out user was server-muted and deafened on joining VC: `{until}`.
     pub const TIMEOUT_VC: &str = "timeout_vc";
     /// An admin ended someone's timeout early: `{by}`.
     pub const PARDONED: &str = "pardoned";
@@ -195,8 +195,7 @@ pub struct ModerationStats {
     pub judged: i64,
     pub hostile: i64,
     pub hostile_last_day: i64,
-    pub native: i64,
-    pub forced: i64,
+    pub timed_out: i64,
 }
 
 /// How much of each kind was logged.
@@ -266,10 +265,7 @@ impl Db {
                 COALESCE(SUM(kind = 'judged'), 0) AS judged,
                 COALESCE(SUM(kind = 'hostile'), 0) AS hostile,
                 COALESCE(SUM(kind = 'hostile' AND at > ?2), 0) AS hostile_last_day,
-                COALESCE(SUM(kind = 'timed_out' AND json_extract(data, '$.method') = 'native'), 0)
-                    AS native,
-                COALESCE(SUM(kind = 'timed_out' AND json_extract(data, '$.method') = 'forced'), 0)
-                    AS forced
+                COALESCE(SUM(kind = 'timed_out'), 0) AS timed_out
              FROM activity_log WHERE ?1 IS NULL OR guild_id = ?1",
         )
         .bind(guild_id.map(|g| g as i64))
@@ -467,9 +463,9 @@ mod tests {
             (1, Log::new(kind::JUDGED, json!({"score": 0.9}))),
             (1, Log::new(kind::HOSTILE, json!({"said": "old"}))),
             (1, Log::new(kind::HOSTILE, json!({"said": "new"}))),
-            (1, Log::new(kind::TIMED_OUT, json!({"method": "native"}))),
-            (1, Log::new(kind::TIMED_OUT, json!({"method": "forced"}))),
-            (2, Log::new(kind::TIMED_OUT, json!({"method": "forced"}))),
+            (1, Log::new(kind::TIMED_OUT, json!({"secs": 10}))),
+            (1, Log::new(kind::TIMED_OUT, json!({"secs": 10}))),
+            (2, Log::new(kind::TIMED_OUT, json!({"secs": 10}))),
         ];
         for (g, log) in &entries {
             db.log_activity(*g, log, today).await.unwrap();
@@ -488,11 +484,10 @@ mod tests {
                 judged: 2,
                 hostile: 2,
                 hostile_last_day: 1,
-                native: 1,
-                forced: 1,
+                timed_out: 2,
             }
         );
-        assert_eq!(db.moderation_stats(None).await.unwrap().forced, 2);
+        assert_eq!(db.moderation_stats(None).await.unwrap().timed_out, 3);
 
         let recent = db.recent(1, kind::HOSTILE, 1).await.unwrap();
         assert_eq!(recent.len(), 1);

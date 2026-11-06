@@ -1,84 +1,33 @@
-//! Timeouts. Discord's native timeout is used where Discord allows it; the owner, admins and
-//! anyone at or above the bot's top role get a forced one instead. Either way the bot enforces it
-//! too, so both behave the same: until it ends, the user's messages are deleted, their reactions
-//! are removed, and they're server-muted in VC.
+//! Timeouts. Discord's own timeout isn't used: the bot enforces every timeout itself, the same
+//! for everyone. Until it ends, the user's messages are deleted, their reactions are removed, and
+//! they're server-muted and deafened in VC.
 //!
-//! A timeout row lives in the database from [`time_out`] until [`release`] has unmuted the user
-//! (if the bot muted them). [`release`] is the only place a row is removed.
+//! A timeout row lives in the database from [`time_out`] until [`release`] has undone the mute
+//! and deafen (if the bot applied them). [`release`] is the only place a row is removed.
 
 use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use poise::serenity_prelude::{
-    self as serenity, EditMember, GuildId, Member, Message, Reaction, Timestamp, UserId,
-};
+use poise::serenity_prelude::{self as serenity, EditMember, GuildId, Message, Reaction, UserId};
 use serde_json::json;
 
 use crate::app::Data;
-use crate::db::{Method, TimeoutRow};
+use crate::db::TimeoutRow;
 use crate::stats::{self, Log, kind};
 
 /// How long a hostile participant is timed out for.
 pub const TIMEOUT_SECS: u64 = 10;
 
-/// What decides whether Discord lets the bot time a member out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Standing {
-    pub is_owner: bool,
-    pub is_admin: bool,
-    /// Position of the member's highest role (0 = only @everyone).
-    pub top_role: u16,
-    /// Position of the bot's highest role.
-    pub bot_top_role: u16,
-}
-
-/// Discord refuses native timeouts on the owner, admins, and anyone whose top role isn't below
-/// the bot's.
-pub fn method(s: Standing) -> Method {
-    if s.is_owner || s.is_admin || s.top_role >= s.bot_top_role {
-        Method::Forced
-    } else {
-        Method::Native
-    }
-}
-
-fn standing(ctx: &serenity::Context, guild_id: GuildId, member: &Member) -> Option<Standing> {
-    let g = ctx.cache.guild(guild_id)?;
-    let bot = g.members.get(&ctx.cache.current_user().id)?;
-    let top = |m: &Member| {
-        m.roles
-            .iter()
-            .filter_map(|r| g.roles.get(r))
-            .map(|r| r.position)
-            .max()
-            .unwrap_or(0)
-    };
-    Some(Standing {
-        is_owner: g.owner_id == member.user.id,
-        is_admin: g.member_permissions(member).administrator(),
-        top_role: top(member),
-        bot_top_role: top(bot),
-    })
-}
-
-/// Audit log reasons are capped at 512 characters by Discord.
-fn audit_reason(reason: &str) -> String {
-    reason.chars().take(500).collect()
-}
-
 /// What [`time_out`] did.
 #[derive(Clone, Debug)]
 pub struct Applied {
-    pub method: Method,
     pub until: DateTime<Utc>,
-    /// Why a native timeout was refused, when it fell back to forced.
-    pub native_error: Option<String>,
-    /// Whether they were in VC and the bot server-muted them.
+    /// Whether they were in VC and the bot server-muted and deafened them.
     pub muted: bool,
 }
 
-/// Time `user` out for [`TIMEOUT_SECS`], natively if Discord allows it, otherwise forced.
+/// Time `user` out for [`TIMEOUT_SECS`].
 pub async fn time_out(
     ctx: &serenity::Context,
     data: &Data,
@@ -87,38 +36,17 @@ pub async fn time_out(
     reason: &str,
 ) -> Result<Applied> {
     let until = Utc::now() + Duration::from_secs(TIMEOUT_SECS);
-    let member = guild_id.member(ctx, user).await?;
-    let mut method = standing(ctx, guild_id, &member).map_or(Method::Forced, method);
-    let mut native_error = None;
-    if method == Method::Native {
-        let reason = audit_reason(reason);
-        let edit = EditMember::new()
-            .disable_communication_until_datetime(Timestamp::from(until))
-            .audit_log_reason(&reason);
-        if let Err(e) = guild_id.edit_member(ctx, user, edit).await {
-            tracing::info!(%guild_id, %user, "native timeout refused, forcing it: {e}");
-            native_error = Some(e.to_string());
-            method = Method::Forced;
-        }
-    }
     data.db
-        .start_timeout(guild_id.get(), user.get(), until, method)
+        .start_timeout(guild_id.get(), user.get(), until)
         .await?;
     let muted = in_voice(ctx, guild_id, user) && mute(ctx, data, guild_id, user).await;
-    let applied = Applied {
-        method,
-        until,
-        native_error,
-        muted,
-    };
+    let applied = Applied { until, muted };
     let log = Log::new(
         kind::TIMED_OUT,
         json!({
-            "method": applied.method.to_string(),
             "secs": TIMEOUT_SECS,
             "until": applied.until,
             "reason": reason,
-            "native_error": applied.native_error,
             "muted": applied.muted,
         }),
     )
@@ -139,9 +67,11 @@ fn voice_state(ctx: &serenity::Context, guild_id: GuildId, user: UserId) -> Opti
     Some((vs.channel_id?.get(), vs.mute))
 }
 
-/// Server-mute `user` (in VC) for their timeout, unless someone else already muted them.
-/// Returns whether the bot muted them.
+/// Server-mute and deafen `user` (in VC) for their timeout, unless someone else already muted
+/// them. Returns whether the bot did.
 async fn mute(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: UserId) -> bool {
+    // ponytail: one flag covers both, so a moderator's deafen (without a mute) is lifted with
+    // ours. Track mute and deafen separately if that ever matters.
     if voice_state(ctx, guild_id, user).is_some_and(|(_, muted)| muted) {
         return false; // a moderator's mute: not ours to lift later
     }
@@ -156,11 +86,12 @@ async fn mute(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: Use
     }
     let edit = EditMember::new()
         .mute(true)
+        .deafen(true)
         .audit_log_reason("NiceNovember: timed out");
     match guild_id.edit_member(ctx, user, edit).await {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!(%guild_id, %user, "server mute failed: {e}");
+            tracing::warn!(%guild_id, %user, "server mute/deafen failed: {e}");
             data.db
                 .set_voice_muted(guild_id.get(), user.get(), false)
                 .await
@@ -174,7 +105,7 @@ async fn mute(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: Use
 pub enum ReleaseStep {
     /// Nothing to undo: just drop the row.
     Drop,
-    /// Lift the bot's server mute, then drop the row.
+    /// Lift the bot's server mute and deafen, then drop the row.
     Unmute,
     /// Owed an unmute but not in VC, where Discord can't lift it: keep the row for later.
     Wait,
@@ -188,9 +119,9 @@ pub fn release_step(voice_muted: bool, in_voice: bool) -> ReleaseStep {
     }
 }
 
-/// Lift a timeout that has ended: unmute them if the bot muted them, then drop the row. If
-/// they're owed an unmute but aren't in VC (a server mute sticks until lifted), the row stays and
-/// [`on_voice_join`] unmutes them when they're back.
+/// Lift a timeout that has ended: unmute and undeafen them if the bot muted them, then drop the
+/// row. If they're owed an unmute but aren't in VC (a server mute sticks until lifted), the row
+/// stays and [`on_voice_join`] unmutes them when they're back.
 pub async fn release(ctx: &serenity::Context, data: &Data, row: &TimeoutRow) -> Result<()> {
     let (guild_id, user) = (
         GuildId::new(row.guild_id as u64),
@@ -201,6 +132,7 @@ pub async fn release(ctx: &serenity::Context, data: &Data, row: &TimeoutRow) -> 
         ReleaseStep::Unmute => {
             let edit = EditMember::new()
                 .mute(false)
+                .deafen(false)
                 .audit_log_reason("NiceNovember: timeout over");
             guild_id.edit_member(ctx, user, edit).await?;
         }
@@ -209,7 +141,7 @@ pub async fn release(ctx: &serenity::Context, data: &Data, row: &TimeoutRow) -> 
     data.db.delete_timeout(guild_id.get(), user.get()).await?;
     let log = Log::new(
         kind::TIMEOUT_RELEASED,
-        json!({ "method": row.method, "unmuted": row.voice_muted, "until": row.until }),
+        json!({ "unmuted": row.voice_muted, "until": row.until }),
     )
     .user(user);
     stats::record(data, guild_id, log).await;
@@ -244,20 +176,14 @@ pub async fn pardon(
     if !data.db.end_timeout(guild_id.get(), user.get()).await? {
         return Ok(false);
     }
-    if row.method == Method::Native.to_string() {
-        let edit = EditMember::new()
-            .enable_communication()
-            .audit_log_reason("NiceNovember: pardoned");
-        guild_id.edit_member(ctx, user, edit).await.ok();
-    }
     let log = Log::new(kind::PARDONED, json!({ "by": by.to_string() })).user(user);
     stats::record(data, guild_id, log).await;
     release(ctx, data, &row).await?;
     Ok(true)
 }
 
-/// Someone joined (or moved within) VC: mute them if they're timed out, unmute them if they're
-/// owed it.
+/// Someone joined (or moved within) VC: mute and deafen them if they're timed out, undo it if
+/// they're owed that.
 pub async fn on_voice_join(
     ctx: &serenity::Context,
     data: &Data,
@@ -342,36 +268,11 @@ pub async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> 
 mod tests {
     use super::*;
 
-    fn s(is_owner: bool, is_admin: bool, top_role: u16) -> Standing {
-        Standing {
-            is_owner,
-            is_admin,
-            top_role,
-            bot_top_role: 5,
-        }
-    }
-
-    #[test]
-    fn untouchable_members_get_forced_timeouts() {
-        assert_eq!(method(s(false, false, 0)), Method::Native);
-        assert_eq!(method(s(false, false, 4)), Method::Native);
-        assert_eq!(method(s(false, false, 5)), Method::Forced, "same level");
-        assert_eq!(method(s(false, false, 9)), Method::Forced, "above the bot");
-        assert_eq!(method(s(true, false, 0)), Method::Forced, "owner");
-        assert_eq!(method(s(false, true, 0)), Method::Forced, "admin");
-    }
-
     #[test]
     fn mutes_are_lifted_only_in_voice() {
         assert_eq!(release_step(false, false), ReleaseStep::Drop);
         assert_eq!(release_step(false, true), ReleaseStep::Drop);
         assert_eq!(release_step(true, true), ReleaseStep::Unmute);
         assert_eq!(release_step(true, false), ReleaseStep::Wait);
-    }
-
-    #[test]
-    fn audit_reasons_fit() {
-        assert_eq!(audit_reason("short"), "short");
-        assert_eq!(audit_reason(&"x".repeat(900)).chars().count(), 500);
     }
 }

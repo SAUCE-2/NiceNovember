@@ -69,19 +69,18 @@ pub async fn judge(
     let reason = format!("hostile, jev {score:.2}: {}", u.said);
     let applied = timeout::time_out(ctx, data, guild_id, u.user, &reason).await;
     let announced = announce(ctx, &gcfg, &u).await;
-    let (method, muted, error) = match &applied {
-        Ok(a) => (Some(a.method.to_string()), a.muted, None),
+    let (muted, error) = match &applied {
+        Ok(a) => (a.muted, None),
         Err(e) => {
             tracing::warn!(%guild_id, user = %u.user, "timeout failed: {e:#}");
-            (None, false, Some(format!("{e:#}")))
+            (false, Some(format!("{e:#}")))
         }
     };
-    let details = details(guild_id, &u, score, threshold, method.as_deref(), &applied);
+    let details = details(guild_id, &u, score, threshold, &applied);
     post_log(ctx, &gcfg, details).await;
     let entry = json!({
         "score": score,
         "threshold": threshold,
-        "method": method,
         "muted": muted,
         "timeout_error": error,
         "announced": announced,
@@ -112,7 +111,6 @@ fn details(
     u: &Utterance,
     score: f32,
     threshold: f32,
-    method: Option<&str>,
     applied: &Result<timeout::Applied>,
 ) -> String {
     let link = u.message.map_or(String::new(), |m| {
@@ -121,17 +119,10 @@ fn details(
             u.channel
         )
     });
-    let outcome = match (method, applied) {
-        (Some(m), Ok(a)) => {
-            let refused = a
-                .native_error
-                .as_deref()
-                .map_or(String::new(), |e| format!(" (native refused: {e})"));
-            let muted = if a.muted { ", server-muted" } else { "" };
-            format!("{m} timeout{refused}{muted}")
-        }
-        (_, Err(e)) => format!("timeout failed: {e}"),
-        _ => "no timeout".into(),
+    let outcome = match applied {
+        Ok(a) if a.muted => "timed out, server-muted and deafened".into(),
+        Ok(_) => "timed out".into(),
+        Err(e) => format!("timeout failed: {e}"),
     };
     format!(
         "🔎 <@{}> · {:?} in <#{}> · jev {score:.2} (threshold {threshold:.2}) · {outcome}{link}",
@@ -158,7 +149,6 @@ pub async fn post_log(ctx: &serenity::Context, gcfg: &GuildConfig, content: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Method;
     use crate::hostility::Source;
     use poise::serenity_prelude::{MessageId, UserId};
 
@@ -177,22 +167,22 @@ mod tests {
     #[test]
     fn details_explain_what_happened() {
         let g = GuildId::new(1);
-        let forced = Ok(timeout::Applied {
-            method: Method::Forced,
-            until: chrono::Utc::now(),
-            native_error: Some("Missing Permissions".into()),
-            muted: true,
-        });
+        let applied = |muted| {
+            Ok(timeout::Applied {
+                until: chrono::Utc::now(),
+                muted,
+            })
+        };
         assert_eq!(
-            details(g, &u(Some(5)), 0.912, 0.7, Some("forced"), &forced),
-            "🔎 <@7> · Message in <#9> · jev 0.91 (threshold 0.70) · forced timeout \
-             (native refused: Missing Permissions), server-muted · \
-             [message](https://discord.com/channels/1/9/5)"
+            details(g, &u(Some(5)), 0.912, 0.7, &applied(true)),
+            "🔎 <@7> · Message in <#9> · jev 0.91 (threshold 0.70) · timed out, server-muted \
+             and deafened · [message](https://discord.com/channels/1/9/5)"
         );
-        let failed = Err(anyhow::anyhow!("unknown member"));
+        assert!(details(g, &u(None), 0.8, 0.7, &applied(false)).ends_with("· timed out"));
+        let failed = Err(anyhow::anyhow!("database is locked"));
         assert!(
-            details(g, &u(None), 0.8, 0.7, None, &failed)
-                .ends_with("· timeout failed: unknown member")
+            details(g, &u(None), 0.8, 0.7, &failed)
+                .ends_with("· timeout failed: database is locked")
         );
     }
 }

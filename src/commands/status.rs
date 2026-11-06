@@ -77,8 +77,8 @@ pub async fn status(ctx: Ctx<'_>) -> Result<()> {
 
 fn summary(s: &ModerationStats) -> String {
     format!(
-        "Heard in VC: {}\nJudged: {}\nHostile: {} ({} in 24h)\nTimeouts: {} native, {} forced",
-        s.heard, s.judged, s.hostile, s.hostile_last_day, s.native, s.forced
+        "Heard in VC: {}\nJudged: {}\nHostile: {} ({} in 24h)\nTimeouts: {}",
+        s.heard, s.judged, s.hostile, s.hostile_last_day, s.timed_out
     )
 }
 
