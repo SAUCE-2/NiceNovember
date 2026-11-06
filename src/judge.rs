@@ -14,7 +14,7 @@ use crate::app::Data;
 use crate::db::GuildConfig;
 use crate::hostility::{self, NO, Utterance, YES};
 use crate::stats::{self, Log, kind};
-use crate::timeout::{self, TIMEOUT_SECS};
+use crate::timeout;
 
 /// Judge `u` (with any images it carries) and act on it if it's hostile.
 pub async fn judge(
@@ -107,7 +107,7 @@ async fn announce(ctx: &serenity::Context, gcfg: &GuildConfig, u: &Utterance) ->
         return false;
     };
     let msg = CreateMessage::new()
-        .content(hostility::announcement(u, TIMEOUT_SECS))
+        .content(hostility::announcement(u))
         .allowed_mentions(CreateAllowedMentions::new());
     match ChannelId::new(ch as u64).send_message(ctx, msg).await {
         Ok(_) => true,
