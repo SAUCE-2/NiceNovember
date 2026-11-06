@@ -274,3 +274,9 @@ STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh carg
 
 Made with the same stack as [SpiritBot](https://github.com/SAUCE-2/spritbot-slop). CI runs
 `cargo fmt`, `clippy`, tests and the deploy script tests on every PR, and builds the image.
+
+Every push to `main` publishes the image as `:latest`, `:<commit>` and `:<version>`, and tags the
+commit `v<version>`. The version is [semver](https://semver.org) worked out from the
+[Conventional Commits](https://www.conventionalcommits.org) since the last release: a breaking
+change (`feat!:` or a `BREAKING CHANGE:` footer) bumps the major, a `feat` the minor, anything else
+the patch. `scripts/next-version.sh` prints the one the next push would get, and `/status` shows it.
