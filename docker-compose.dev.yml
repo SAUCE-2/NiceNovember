@@ -1,0 +1,16 @@
+# Local testing: builds from source instead of pulling from GHCR.
+#   docker compose -f docker-compose.dev.yml up -d --build
+name: nicenovember-dev
+
+services:
+  nicenovember:
+    build: .
+    image: nicenovember-dev
+    container_name: nicenovember-dev
+    env_file: .env
+    volumes:
+      - data:/data
+
+volumes:
+  data:
+    name: nicenovember-dev-data
