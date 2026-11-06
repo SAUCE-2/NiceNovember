@@ -35,6 +35,7 @@ pub struct Facts {
     pub bot_is_admin: Option<bool>,
     pub jev: bool,
     pub whisper: bool,
+    pub shadow: bool,
 }
 
 const FIX_ROLE: &str = "`/nice setup role:@Role`";
@@ -86,6 +87,13 @@ pub fn checklist(f: &Facts) -> Vec<String> {
                 .into(),
         );
     }
+    if f.shadow && f.log != Setting::Present(()) {
+        add(
+            "Shadow mode is on but there's no log channel, so would-be timeouts are only in \
+             the activity log → `/nice setup log_channel:#channel`"
+                .into(),
+        );
+    }
     out
 }
 
@@ -115,6 +123,7 @@ pub async fn problems(
             bot_is_admin: bot_member.map(|m| g.member_permissions(&m).administrator()),
             jev: data.jev.is_some(),
             whisper: data.stt.is_some(),
+            shadow: gcfg.shadow,
         }
     };
     Ok(checklist(&facts))
@@ -220,6 +229,7 @@ mod tests {
             bot_is_admin: Some(true),
             jev: true,
             whisper: true,
+            shadow: false,
         }
     }
 
@@ -242,6 +252,7 @@ mod tests {
             check(|f| (f.voice, f.whisper) = (Setting::Unset, false)).len() == 1,
             "no Whisper only matters with a voice channel"
         );
+        assert!(check(|f| (f.shadow, f.log) = (true, Setting::Present(()))).is_empty());
     }
 
     #[test]
@@ -272,6 +283,7 @@ mod tests {
         assert!(one(|f| f.bot_is_admin = Some(false)).contains("Administrator"));
         assert!(one(|f| f.jev = false).contains("JEV_API_KEY"));
         assert!(one(|f| f.whisper = false).contains("WHISPER_MODEL"));
+        assert!(one(|f| f.shadow = true).starts_with("Shadow mode is on but there's no log"));
     }
 
     #[test]
