@@ -60,9 +60,16 @@ pub async fn judge(
         "images": n_images,
         "context_lines": u.call.as_ref().map(|c| c.recent.len()),
         "in_call": u.call.as_ref().map(|c| c.in_call.len()),
+        "shadow": gcfg.shadow,
     });
     stats::record(data, guild_id, log(kind::JUDGED, judged)).await;
     if !hostile {
+        return Ok(());
+    }
+    if gcfg.shadow {
+        if let Some(ch) = gcfg.log_channel_id {
+            send(ctx, ch, shadow_report(guild_id, &u, score, threshold)).await;
+        }
         return Ok(());
     }
 
@@ -76,8 +83,13 @@ pub async fn judge(
             (false, Some(format!("{e:#}")))
         }
     };
-    let details = details(guild_id, &u, score, threshold, &applied);
-    post_log(ctx, &gcfg, details).await;
+    let outcome = outcome(&applied);
+    post_log(
+        ctx,
+        &gcfg,
+        details(guild_id, &u, score, threshold, &outcome),
+    )
+    .await;
     let entry = json!({
         "score": score,
         "threshold": threshold,
@@ -106,27 +118,35 @@ async fn announce(ctx: &serenity::Context, gcfg: &GuildConfig, u: &Utterance) ->
     }
 }
 
-fn details(
-    guild_id: GuildId,
-    u: &Utterance,
-    score: f32,
-    threshold: f32,
-    applied: &Result<timeout::Applied>,
-) -> String {
+fn outcome(applied: &Result<timeout::Applied>) -> String {
+    match applied {
+        Ok(a) if a.muted => "timed out, server-muted and deafened".into(),
+        Ok(_) => "timed out".into(),
+        Err(e) => format!("timeout failed: {e}"),
+    }
+}
+
+fn details(guild_id: GuildId, u: &Utterance, score: f32, threshold: f32, outcome: &str) -> String {
     let link = u.message.map_or(String::new(), |m| {
         format!(
             " · [message](https://discord.com/channels/{guild_id}/{}/{m})",
             u.channel
         )
     });
-    let outcome = match applied {
-        Ok(a) if a.muted => "timed out, server-muted and deafened".into(),
-        Ok(_) => "timed out".into(),
-        Err(e) => format!("timeout failed: {e}"),
-    };
     format!(
         "🔎 <@{}> · {:?} in <#{}> · jev {score:.2} (threshold {threshold:.2}) · {outcome}{link}",
         u.user, u.source, u.channel
+    )
+}
+
+/// The log line for a hostile verdict in shadow mode, quoting what was said since nothing else
+/// does.
+fn shadow_report(guild_id: GuildId, u: &Utterance, score: f32, threshold: f32) -> String {
+    let outcome = "👻 shadow mode, would have been timed out";
+    format!(
+        "{}\n{}",
+        details(guild_id, u, score, threshold, outcome),
+        hostility::quote(&u.said)
     )
 }
 
@@ -138,6 +158,10 @@ pub async fn post_log(ctx: &serenity::Context, gcfg: &GuildConfig, content: Stri
     if gcfg.announce_channel_id == Some(ch) {
         return;
     }
+    send(ctx, ch, content).await;
+}
+
+async fn send(ctx: &serenity::Context, ch: i64, content: String) {
     let msg = CreateMessage::new()
         .content(content)
         .allowed_mentions(CreateAllowedMentions::new());
@@ -174,15 +198,21 @@ mod tests {
             })
         };
         assert_eq!(
-            details(g, &u(Some(5)), 0.912, 0.7, &applied(true)),
+            details(g, &u(Some(5)), 0.912, 0.7, &outcome(&applied(true))),
             "🔎 <@7> · Message in <#9> · jev 0.91 (threshold 0.70) · timed out, server-muted \
              and deafened · [message](https://discord.com/channels/1/9/5)"
         );
-        assert!(details(g, &u(None), 0.8, 0.7, &applied(false)).ends_with("· timed out"));
+        assert_eq!(outcome(&applied(false)), "timed out");
         let failed = Err(anyhow::anyhow!("database is locked"));
-        assert!(
-            details(g, &u(None), 0.8, 0.7, &failed)
-                .ends_with("· timeout failed: database is locked")
+        assert_eq!(outcome(&failed), "timeout failed: database is locked");
+    }
+
+    #[test]
+    fn shadow_report_says_what_would_have_happened() {
+        assert_eq!(
+            shadow_report(GuildId::new(1), &u(Some(5)), 0.912, 0.7),
+            "🔎 <@7> · Message in <#9> · jev 0.91 (threshold 0.70) · 👻 shadow mode, \
+             would have been timed out · [message](https://discord.com/channels/1/9/5)\n> x"
         );
     }
 }

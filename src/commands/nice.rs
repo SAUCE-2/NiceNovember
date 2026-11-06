@@ -62,6 +62,8 @@ async fn setup(
     voice_channel: Option<Channel>,
     #[description = "Jev score that counts as hostile, 0.05 to 1 (default 0.7). Lower = stricter"]
     threshold: Option<f64>,
+    #[description = "Judge as usual, but only report would-be timeouts to the log channel"]
+    shadow: Option<bool>,
 ) -> Result<()> {
     let guild_id = guild(ctx)?;
     let data = ctx.data();
@@ -76,6 +78,7 @@ async fn setup(
         log_channel: log_channel.map(|c| c.id().get()),
         voice_channel: voice_channel.map(|c| c.id().get()),
         threshold,
+        shadow,
     };
     db.apply_setup(guild_id.get(), &changes).await?;
     monitor::ensure(ctx.serenity_context(), data, guild_id).await?;
@@ -84,11 +87,18 @@ async fn setup(
     db.set_setup_hash(guild_id.get(), Some(&problems.join("\n")))
         .await?;
     let gcfg = db.guild(guild_id.get()).await?;
-    let embed = setup::embed(&problems).field(
-        "Threshold",
-        format!("{:.2} (default {DEFAULT_THRESHOLD:.2})", gcfg.threshold()),
-        true,
-    );
+    let shadow = if gcfg.shadow {
+        "👻 on: nobody is timed out"
+    } else {
+        "off"
+    };
+    let embed = setup::embed(&problems)
+        .field(
+            "Threshold",
+            format!("{:.2} (default {DEFAULT_THRESHOLD:.2})", gcfg.threshold()),
+            true,
+        )
+        .field("Shadow mode", shadow, true);
     ctx.send(CreateReply::default().embed(embed).ephemeral(true))
         .await?;
     Ok(())

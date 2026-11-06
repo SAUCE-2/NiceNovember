@@ -41,19 +41,18 @@ pub async fn status(ctx: Ctx<'_>) -> Result<()> {
         on_off(data.jev.is_some()),
     );
 
-    let all = data.db.moderation_stats(None).await?;
     let mut embed = CreateEmbed::new()
         .title("🤖 Bot status")
         .description(bot)
         .colour(0x27ae60);
 
     if let Some(guild_id) = ctx.guild_id() {
-        let here = data.db.moderation_stats(Some(guild_id.get())).await?;
+        let here = data.db.moderation_stats(guild_id.get()).await?;
         let listening = data
             .monitor
             .listening_in(guild_id)
             .map_or("not in VC".to_owned(), |c| format!("<#{c}>"));
-        let active = data.db.active_timeouts(Some(guild_id.get())).await?;
+        let active = data.db.active_timeouts(guild_id.get()).await?;
         embed = embed.field(
             "This server",
             format!(
@@ -63,12 +62,6 @@ pub async fn status(ctx: Ctx<'_>) -> Result<()> {
             true,
         );
     }
-    let active = data.db.active_timeouts(None).await?;
-    embed = embed.field(
-        "All servers",
-        format!("{}\nTimed out now: {active}", summary(&all)),
-        true,
-    );
 
     ctx.send(CreateReply::default().embed(embed).ephemeral(true))
         .await?;

@@ -256,8 +256,8 @@ impl Db {
         .await?)
     }
 
-    /// Moderation counts for `/status`, in one guild or across all of them.
-    pub async fn moderation_stats(&self, guild_id: Option<u64>) -> Result<ModerationStats> {
+    /// Moderation counts for `/status`, in one guild. Stats never cross guilds.
+    pub async fn moderation_stats(&self, guild_id: u64) -> Result<ModerationStats> {
         let day_ago = db::fmt_time(chrono::Utc::now() - chrono::Duration::days(1));
         Ok(sqlx::query_as(
             "SELECT
@@ -266,9 +266,9 @@ impl Db {
                 COALESCE(SUM(kind = 'hostile'), 0) AS hostile,
                 COALESCE(SUM(kind = 'hostile' AND at > ?2), 0) AS hostile_last_day,
                 COALESCE(SUM(kind = 'timed_out'), 0) AS timed_out
-             FROM activity_log WHERE ?1 IS NULL OR guild_id = ?1",
+             FROM activity_log WHERE guild_id = ?1",
         )
-        .bind(guild_id.map(|g| g as i64))
+        .bind(guild_id as i64)
         .bind(day_ago)
         .fetch_one(&self.0)
         .await?)
@@ -453,7 +453,7 @@ mod tests {
     async fn moderation_stats_and_recent() {
         let db = Db::connect("sqlite::memory:").await.unwrap();
         assert_eq!(
-            db.moderation_stats(None).await.unwrap(),
+            db.moderation_stats(1).await.unwrap(),
             ModerationStats::default()
         );
         let today = d("2026-11-06");
@@ -476,7 +476,7 @@ mod tests {
         .execute(&db.0)
         .await
         .unwrap();
-        let g1 = db.moderation_stats(Some(1)).await.unwrap();
+        let g1 = db.moderation_stats(1).await.unwrap();
         assert_eq!(
             g1,
             ModerationStats {
@@ -487,7 +487,12 @@ mod tests {
                 timed_out: 2,
             }
         );
-        assert_eq!(db.moderation_stats(None).await.unwrap().timed_out, 3);
+        let g2 = db.moderation_stats(2).await.unwrap();
+        assert_eq!((g2.timed_out, g2.hostile), (1, 0));
+        assert_eq!(
+            db.moderation_stats(3).await.unwrap(),
+            ModerationStats::default()
+        );
 
         let recent = db.recent(1, kind::HOSTILE, 1).await.unwrap();
         assert_eq!(recent.len(), 1);

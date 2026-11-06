@@ -51,7 +51,8 @@ everyone else in the channel is dropped without being transcribed.
   with the message (and images) they reacted to, and transcripts of
   what they said in VC, with the display names of everyone in the call and the last few lines
   participants said. Audio never leaves your server.
-- **Posted publicly:** each hostile message or transcript, quoted in the announce channel.
+- **Posted publicly:** each hostile message or transcript, quoted in the announce channel. In
+  [shadow mode](#tuning-the-threshold) they're quoted in the log channel instead.
 - **Stored in the bot's database:** the activity log (see below), which includes message content
   and transcripts from the whole server. Treat the database and exports as private.
 
@@ -61,7 +62,7 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 
 | Command | What it does |
 |---|---|
-| `/nice setup [role] [announce_channel] [log_channel] [voice_channel] [threshold]` | Setup checklist, fixing things in one go |
+| `/nice setup [role] [announce_channel] [log_channel] [voice_channel] [threshold] [shadow]` | Setup checklist, fixing things in one go |
 | `/nice unset <log channel\|voice channel\|threshold>` | Clear an optional setting |
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice check <text> [spoken]` | See Jev's score for some text, without timing anyone out (for tuning the threshold) |
@@ -163,6 +164,15 @@ The bot posts a setup checklist when it joins your server. To set it up in one g
 It joins the voice channel straight away and stays there. If it's moved or kicked out, it comes back
 within 30 seconds.
 
+### Tuning the threshold
+
+To find the right threshold on real conversation before anyone gets timed out, turn on shadow mode:
+`/nice setup shadow:true`. Everything is judged and logged as usual, but instead of a timeout and a
+call-out, the log channel gets `🔎 @user · Voice in 🔊General · jev 0.74 (threshold 0.70) · 👻 shadow
+mode, would have been timed out` with the quote. Too many false alarms? Raise the bar with
+`/nice setup threshold:0.8`. Letting too much through? Lower it. `/nice check` scores any text you
+type. Turn it off with `/nice setup shadow:false`.
+
 ### Configuration
 
 All settings are environment variables in `.env`:
@@ -193,7 +203,7 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `typing`, `command`, `thread_create` | Who typed where, which slash command was used, new threads |
 | `member_seen` / `member_join` / `member_leave` / `member_update` | Names, nick and roles (snapshot at startup, then changes) |
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
-| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
+| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
 | `hostile` | Something hostile: what was `said`, `score`, `muted` (server-muted and deafened), `announced` |
 | `timed_out` / `timeout_released` | Each timeout: `secs`, `until`, `muted`; and when it was lifted |
