@@ -67,11 +67,10 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
-| `/stats summary [month]` | How much has been logged, by kind |
-| `/stats export [month]` | Download the activity log as gzipped JSON Lines |
-| `/stats wipe confirm:true [user]` | Delete logged activity, e.g. after testing |
-
-`month` takes `2026-11`, `november`, `last` or `all` and defaults to the current month.
+| `/stats user <user> [count]` | Aggregated stats for someone, plus their recent judged utterances |
+| `/stats summary` | How much has been logged, by kind (admin) |
+| `/stats export` | Download the activity log as gzipped JSON Lines (admin) |
+| `/stats wipe confirm:true [user]` | Delete logged activity, e.g. after testing (admin) |
 
 ## Self-hosting
 
@@ -210,14 +209,14 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `pardoned` | An admin ended a timeout early (`by`) |
 | `monitor_joined` / `monitor_failed` | The bot joined the monitored voice channel, or couldn't |
 
-To get the data out, run `/stats export month:november`. It gives you a `.jsonl.gz` file with one
-JSON object per line. If it's over Discord's 10 MB upload limit, copy the database instead (see
-above) and query it with SQLite's JSON functions. Some ideas:
+To get the data out, run `/stats export`. It gives you a `.jsonl.gz` file with one JSON object per
+line. If it's over Discord's 10 MB upload limit, copy the database instead (see above) and query it
+with SQLite's JSON functions. Some ideas:
 
 ```sql
--- Meanest people this month
+-- Meanest people
 SELECT user_id, COUNT(*) FROM activity_log
-WHERE kind = 'hostile' AND day LIKE '2026-11-%' GROUP BY user_id ORDER BY 2 DESC;
+WHERE kind = 'hostile' GROUP BY user_id ORDER BY 2 DESC;
 
 -- Average hostility score per person, chat vs voice
 SELECT user_id, json_extract(data, '$.source') AS source, AVG(json_extract(data, '$.score')), COUNT(*)

@@ -15,7 +15,7 @@ pub mod sessions;
 use std::io::Write as _;
 
 use anyhow::Result;
-use chrono::{Datelike, Months, NaiveDate};
+use chrono::NaiveDate;
 use poise::serenity_prelude::{ChannelId, GuildId, UserId};
 use serde::Serialize;
 use serde_json::Value;
@@ -102,78 +102,6 @@ pub async fn record(data: &Data, guild_id: GuildId, log: Log) {
     }
 }
 
-// ---- periods ----
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Period {
-    All,
-    Month(NaiveDate), // first of the month
-}
-
-impl Period {
-    /// Parse "2026-12", "december", "dec", "this", "last" or "all". Empty = this month.
-    /// A bare month name means the most recent one (so "december" in January is last year's).
-    pub fn parse(s: &str, today: NaiveDate) -> Option<Self> {
-        let s = s.trim().to_lowercase();
-        let this = today.with_day(1).unwrap();
-        match s.as_str() {
-            "" | "this" | "this month" | "now" => return Some(Period::Month(this)),
-            "last" | "last month" => return Some(Period::Month(this - Months::new(1))),
-            "all" | "all time" | "ever" => return Some(Period::All),
-            _ => {}
-        }
-        if let Ok(d) = NaiveDate::parse_from_str(&format!("{s}-01"), "%Y-%m-%d") {
-            return Some(Period::Month(d));
-        }
-        const MONTHS: [&str; 12] = [
-            "january",
-            "february",
-            "march",
-            "april",
-            "may",
-            "june",
-            "july",
-            "august",
-            "september",
-            "october",
-            "november",
-            "december",
-        ];
-        if s.len() < 3 {
-            return None;
-        }
-        let m = MONTHS.iter().position(|name| name.starts_with(&s))? as u32 + 1;
-        let year = if m > today.month() {
-            today.year() - 1
-        } else {
-            today.year()
-        };
-        NaiveDate::from_ymd_opt(year, m, 1).map(Period::Month)
-    }
-
-    /// `all` for all time, otherwise the month written with the chrono format `month`.
-    fn render(&self, all: &str, month: &str) -> String {
-        match self {
-            Period::All => all.into(),
-            Period::Month(d) => d.format(month).to_string(),
-        }
-    }
-
-    /// `LIKE` pattern matching this period's `day` values.
-    fn pattern(&self) -> String {
-        self.render("%", "%Y-%m-%%")
-    }
-
-    pub fn label(&self) -> String {
-        self.render("all time", "%B %Y")
-    }
-
-    /// For file names.
-    pub fn slug(&self) -> String {
-        self.render("all", "%Y-%m")
-    }
-}
-
 // ---- storage ----
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -206,6 +134,21 @@ pub struct KindCount {
     pub people: i64,
 }
 
+/// Aggregates for one user in a guild, for `/stats user`.
+#[derive(Clone, Debug, Default, PartialEq, sqlx::FromRow)]
+pub struct UserStats {
+    pub messages: i64,
+    pub reactions: i64,
+    pub heard: i64,
+    pub heard_audio_ms: i64,
+    pub judged: i64,
+    pub avg_score: Option<f64>,
+    pub hostile: i64,
+    pub timed_out: i64,
+    pub timeout_secs: i64,
+    pub vc_secs: i64,
+}
+
 impl Db {
     pub async fn log_activity(&self, guild_id: u64, log: &Log, day: NaiveDate) -> Result<()> {
         sqlx::query(
@@ -225,33 +168,72 @@ impl Db {
         Ok(())
     }
 
-    /// Entries in the period, oldest first, `after` a given id (for paging through big exports).
-    pub async fn activity(
-        &self,
-        guild_id: u64,
-        period: Period,
-        after: i64,
-        limit: i64,
-    ) -> Result<Vec<LogRow>> {
+    /// Entries, oldest first, `after` a given id (for paging through big exports).
+    pub async fn activity(&self, guild_id: u64, after: i64, limit: i64) -> Result<Vec<LogRow>> {
         Ok(sqlx::query_as(
             "SELECT id, user_id, channel_id, kind, participant, data, day, at FROM activity_log
-             WHERE guild_id = ? AND day LIKE ? AND id > ? ORDER BY id LIMIT ?",
+             WHERE guild_id = ? AND id > ? ORDER BY id LIMIT ?",
         )
         .bind(guild_id as i64)
-        .bind(period.pattern())
         .bind(after)
         .bind(limit)
         .fetch_all(&self.0)
         .await?)
     }
 
-    pub async fn activity_counts(&self, guild_id: u64, period: Period) -> Result<Vec<KindCount>> {
+    pub async fn activity_counts(&self, guild_id: u64) -> Result<Vec<KindCount>> {
         Ok(sqlx::query_as(
             "SELECT kind, COUNT(*) AS n, COUNT(DISTINCT user_id) AS people FROM activity_log
-             WHERE guild_id = ? AND day LIKE ? GROUP BY kind ORDER BY n DESC, kind",
+             WHERE guild_id = ? GROUP BY kind ORDER BY n DESC, kind",
         )
         .bind(guild_id as i64)
-        .bind(period.pattern())
+        .fetch_all(&self.0)
+        .await?)
+    }
+
+    /// Aggregated datapoints for one user in this guild.
+    pub async fn user_stats(&self, guild_id: u64, user_id: u64) -> Result<UserStats> {
+        Ok(sqlx::query_as(
+            "SELECT
+                COALESCE(SUM(kind = 'message'), 0) AS messages,
+                COALESCE(SUM(kind = 'reaction_add'), 0) AS reactions,
+                COALESCE(SUM(kind = 'heard'), 0) AS heard,
+                COALESCE(SUM(CASE WHEN kind = 'heard'
+                    THEN CAST(json_extract(data, '$.audio_ms') AS INTEGER) ELSE 0 END), 0)
+                    AS heard_audio_ms,
+                COALESCE(SUM(kind = 'judged'), 0) AS judged,
+                AVG(CASE WHEN kind = 'judged' THEN json_extract(data, '$.score') END) AS avg_score,
+                COALESCE(SUM(kind = 'hostile'), 0) AS hostile,
+                COALESCE(SUM(kind = 'timed_out'), 0) AS timed_out,
+                COALESCE(SUM(CASE WHEN kind = 'timed_out'
+                    THEN CAST(json_extract(data, '$.secs') AS INTEGER) ELSE 0 END), 0)
+                    AS timeout_secs,
+                COALESCE(SUM(CASE WHEN kind = 'vc_session'
+                    THEN CAST(json_extract(data, '$.secs') AS INTEGER) ELSE 0 END), 0)
+                    AS vc_secs
+             FROM activity_log WHERE guild_id = ? AND user_id = ?",
+        )
+        .bind(guild_id as i64)
+        .bind(user_id as i64)
+        .fetch_one(&self.0)
+        .await?)
+    }
+
+    /// A user's latest judged utterances, newest first (what they said that got scored).
+    pub async fn user_recent_judged(
+        &self,
+        guild_id: u64,
+        user_id: u64,
+        limit: i64,
+    ) -> Result<Vec<LogRow>> {
+        Ok(sqlx::query_as(
+            "SELECT id, user_id, channel_id, kind, participant, data, day, at FROM activity_log
+             WHERE guild_id = ? AND user_id = ? AND kind = 'judged'
+             ORDER BY id DESC LIMIT ?",
+        )
+        .bind(guild_id as i64)
+        .bind(user_id as i64)
+        .bind(limit)
         .fetch_all(&self.0)
         .await?)
     }
@@ -336,17 +318,16 @@ pub fn jsonl_line(r: &LogRow, name: Option<&str>) -> String {
     v.to_string()
 }
 
-/// Gzipped JSON Lines of the whole period, read page by page from the database.
+/// Gzipped JSON Lines of the whole log, read page by page from the database.
 pub async fn export_gz(
     db: &Db,
     guild_id: u64,
-    period: Period,
     name: impl Fn(u64) -> Option<String>,
 ) -> Result<(Vec<u8>, usize)> {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let (mut after, mut total) = (0, 0);
     loop {
-        let rows = db.activity(guild_id, period, after, 5000).await?;
+        let rows = db.activity(guild_id, after, 5000).await?;
         let Some(last) = rows.last() else { break };
         after = last.id;
         total += rows.len();
@@ -365,32 +346,6 @@ mod tests {
 
     fn d(s: &str) -> NaiveDate {
         s.parse().unwrap()
-    }
-
-    #[test]
-    fn periods() {
-        let today = d("2027-01-10");
-        let m = |s| Some(Period::Month(d(s)));
-        assert_eq!(Period::parse("", today), m("2027-01-01"));
-        assert_eq!(Period::parse("last", today), m("2026-12-01"));
-        assert_eq!(Period::parse("dec", today), m("2026-12-01"));
-        assert_eq!(Period::parse("January", today), m("2027-01-01"));
-        assert_eq!(Period::parse("2025-11", today), m("2025-11-01"));
-        assert_eq!(Period::parse("all", today), Some(Period::All));
-        assert_eq!(Period::parse("ju", today), None);
-        assert_eq!(Period::parse("nope", today), None);
-        let dec = Period::Month(d("2026-12-01"));
-        assert_eq!(dec.pattern(), "2026-12-%");
-        assert_eq!(dec.label(), "December 2026");
-        assert_eq!(dec.slug(), "2026-12");
-        assert_eq!(
-            (
-                Period::All.pattern(),
-                Period::All.label(),
-                Period::All.slug()
-            ),
-            ("%".into(), "all time".into(), "all".into())
-        );
     }
 
     #[tokio::test]
@@ -417,14 +372,13 @@ mod tests {
             .await
             .unwrap();
 
-        let dec = Period::Month(d("2026-12-01"));
-        let counts = db.activity_counts(1, dec).await.unwrap();
+        let counts = db.activity_counts(1).await.unwrap();
         let get = |k: &str| counts.iter().find(|c| c.kind == k).unwrap().clone();
-        assert_eq!((get("message").n, get("message").people), (2, 2));
+        assert_eq!((get("message").n, get("message").people), (3, 2));
         assert_eq!(get(kind::HOSTILE).n, 1);
         assert_eq!(get(kind::MONITOR_JOINED).people, 0);
 
-        let rows = db.activity(1, dec, 0, 2).await.unwrap();
+        let rows = db.activity(1, 0, 2).await.unwrap();
         assert_eq!(rows.len(), 2, "paged");
         let line: Value = serde_json::from_str(&jsonl_line(&rows[0], Some("bob"))).unwrap();
         assert_eq!(line["user_id"], "7");
@@ -432,12 +386,12 @@ mod tests {
         assert_eq!(line["data"]["content"], "be nice");
         assert_eq!(line["participant"], true);
 
-        let (gz, n) = export_gz(&db, 1, dec, |_| None).await.unwrap();
-        assert_eq!(n, 4);
+        let (gz, n) = export_gz(&db, 1, |_| None).await.unwrap();
+        assert_eq!(n, 5);
         let mut text = String::new();
         std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&gz[..]), &mut text)
             .unwrap();
-        assert_eq!(text.lines().count(), 4);
+        assert_eq!(text.lines().count(), 5);
         assert!(text.contains("\"kind\":\"hostile\""));
 
         let msg = Log::new("message", json!({"id": "555", "content": "hi"})).user(UserId::new(8));
@@ -446,7 +400,7 @@ mod tests {
         assert_eq!(db.logged_message_author(1, 556).await.unwrap(), None);
 
         assert_eq!(db.wipe_activity(1, Some(7)).await.unwrap(), 3);
-        assert_eq!(db.activity(1, Period::All, 0, 100).await.unwrap().len(), 3);
+        assert_eq!(db.activity(1, 0, 100).await.unwrap().len(), 3);
     }
 
     #[tokio::test]
@@ -498,5 +452,63 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert!(recent[0].data.contains("new"), "newest first");
         assert!(db.recent(2, kind::HOSTILE, 5).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_stats_aggregates_and_recent_judged() {
+        let db = Db::connect("sqlite::memory:").await.unwrap();
+        let day = d("2026-11-06");
+        assert_eq!(db.user_stats(1, 7).await.unwrap(), UserStats::default());
+        let entries = [
+            Log::new("message", json!({})).user(UserId::new(7)),
+            Log::new("message", json!({})).user(UserId::new(7)),
+            Log::new("reaction_add", json!({})).user(UserId::new(7)),
+            Log::new(kind::HEARD, json!({"text": "yo", "audio_ms": 1500})).user(UserId::new(7)),
+            Log::new(kind::HEARD, json!({"text": "hey", "audio_ms": 500})).user(UserId::new(7)),
+            Log::new(
+                kind::JUDGED,
+                json!({"said": "old", "score": 0.2, "source": "message", "hostile": false}),
+            )
+            .user(UserId::new(7)),
+            Log::new(
+                kind::JUDGED,
+                json!({"said": "mean", "score": 0.8, "source": "voice", "hostile": true}),
+            )
+            .user(UserId::new(7)),
+            Log::new(kind::HOSTILE, json!({"said": "mean", "score": 0.8})).user(UserId::new(7)),
+            Log::new(kind::TIMED_OUT, json!({"secs": 60})).user(UserId::new(7)),
+            Log::new(kind::TIMED_OUT, json!({"secs": 120})).user(UserId::new(7)),
+            Log::new(kind::VC_SESSION, json!({"secs": 300})).user(UserId::new(7)),
+            // Other user / guild must not mix in.
+            Log::new(kind::HOSTILE, json!({"said": "nope"})).user(UserId::new(8)),
+            Log::new(kind::JUDGED, json!({"said": "other", "score": 1.0})).user(UserId::new(8)),
+        ];
+        for log in &entries {
+            db.log_activity(1, log, day).await.unwrap();
+        }
+        db.log_activity(
+            2,
+            &Log::new(kind::HOSTILE, json!({"said": "guild2"})).user(UserId::new(7)),
+            day,
+        )
+        .await
+        .unwrap();
+
+        let s = db.user_stats(1, 7).await.unwrap();
+        assert_eq!(s.messages, 2);
+        assert_eq!(s.reactions, 1);
+        assert_eq!(s.heard, 2);
+        assert_eq!(s.heard_audio_ms, 2000);
+        assert_eq!(s.judged, 2);
+        assert!((s.avg_score.unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(s.hostile, 1);
+        assert_eq!(s.timed_out, 2);
+        assert_eq!(s.timeout_secs, 180);
+        assert_eq!(s.vc_secs, 300);
+
+        let recent = db.user_recent_judged(1, 7, 1).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert!(recent[0].data.contains("mean"), "newest judged first");
+        assert!(db.user_recent_judged(1, 9, 5).await.unwrap().is_empty());
     }
 }
