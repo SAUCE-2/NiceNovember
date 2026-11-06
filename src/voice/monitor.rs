@@ -211,20 +211,25 @@ async fn join(
     st: &Shared,
     channel: ChannelId,
 ) {
+    // Listen before joining: Discord says which SSRC is whose while the connection is being set
+    // up, and doesn't say it again for anyone already in the channel. Reset first, so none of it
+    // is wiped.
+    st.lock().unwrap().joined(channel);
+    {
+        let call = manager.get_or_insert(guild_id);
+        let mut call = call.lock().await;
+        call.remove_all_global_events();
+        let rx = Receiver {
+            guild_id,
+            st: st.clone(),
+            tx: data.monitor.sender(ctx, data),
+        };
+        call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), rx.clone());
+        call.add_global_event(CoreEvent::VoiceTick.into(), rx);
+        call.mute(true).await.ok(); // it only listens
+    }
     let log = match manager.join(guild_id, channel).await {
-        Ok(call) => {
-            // Reset before the handlers go on, so no speaker mapping that arrives first is wiped.
-            st.lock().unwrap().joined(channel);
-            let mut call = call.lock().await;
-            call.remove_all_global_events();
-            let rx = Receiver {
-                guild_id,
-                st: st.clone(),
-                tx: data.monitor.sender(ctx, data),
-            };
-            call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), rx.clone());
-            call.add_global_event(CoreEvent::VoiceTick.into(), rx);
-            call.mute(true).await.ok(); // it only listens
+        Ok(_) => {
             tracing::info!(%guild_id, %channel, "monitoring voice");
             Log::new(kind::MONITOR_JOINED, json!({}))
         }
