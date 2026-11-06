@@ -6,7 +6,7 @@ use poise::serenity_prelude::Message;
 use serde_json::{Value, json};
 
 use crate::app::Data;
-use crate::hostility::{Call, Utterance};
+use crate::hostility::{Call, Source, Utterance};
 use jev::{Image, normalize_image, noul};
 
 /// Max images per message sent to Jev (keeps requests small and fast).
@@ -58,6 +58,10 @@ async fn fetch_image(url: &str) -> anyhow::Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || normalize_image(&bytes)).await?
 }
 
+fn placeholders(images: &[Image]) -> Vec<&str> {
+    images.iter().map(|i| i.placeholder.as_str()).collect()
+}
+
 /// Jev `state` for something said: plain text, or text plus what it replies to and images.
 pub fn utterance_state(text: &str, in_reply_to: Option<&str>, images: &[Image]) -> Value {
     if images.is_empty() && in_reply_to.is_none() {
@@ -68,8 +72,7 @@ pub fn utterance_state(text: &str, in_reply_to: Option<&str>, images: &[Image]) 
         state["replying_to_message"] = json!(r);
     }
     if !images.is_empty() {
-        let refs: Vec<&str> = images.iter().map(|i| i.placeholder.as_str()).collect();
-        state["attached_images"] = json!(refs);
+        state["attached_images"] = json!(placeholders(images));
     }
     state
 }
@@ -84,11 +87,22 @@ pub fn voice_state(said: &str, call: &Call) -> Value {
     })
 }
 
-/// Jev `state` for any utterance: the voice form for speech, the chat form otherwise.
+/// Jev `state` for an emoji reaction, with the message (and its images) it's on.
+pub fn reaction_state(emoji: &str, on_message: &str, images: &[Image]) -> Value {
+    let mut state = json!({ "reaction": emoji, "on_message": on_message });
+    if !images.is_empty() {
+        state["on_message_images"] = json!(placeholders(images));
+    }
+    state
+}
+
+/// Jev `state` for any utterance: the form for its source.
 pub fn state_for(u: &Utterance, images: &[Image]) -> Value {
-    match &u.call {
-        Some(call) => voice_state(&u.said, call),
-        None => utterance_state(&u.said, u.in_reply_to.as_deref(), images),
+    let context = u.in_reply_to.as_deref();
+    match (&u.call, u.source) {
+        (Some(call), _) => voice_state(&u.said, call),
+        (None, Source::Reaction) => reaction_state(&u.said, context.unwrap_or_default(), images),
+        (None, _) => utterance_state(&u.said, context, images),
     }
 }
 
@@ -173,6 +187,20 @@ mod tests {
         assert_eq!(
             state_for(&u, &[]),
             json!({ "message_text": "hi", "replying_to_message": "yo" })
+        );
+        u.source = crate::hostility::Source::Reaction;
+        u.said = "🤡".into();
+        assert_eq!(
+            state_for(&u, &[]),
+            json!({ "reaction": "🤡", "on_message": "yo" })
+        );
+        let img = Image {
+            placeholder: "image-1-1".into(),
+            jpeg: vec![],
+        };
+        assert_eq!(
+            state_for(&u, &[img])["on_message_images"],
+            json!(["image-1-1"])
         );
     }
 

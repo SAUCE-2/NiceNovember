@@ -14,6 +14,8 @@ pub enum Source {
     Edit,
     /// Speech in the monitored voice channel, transcribed by Whisper.
     Voice,
+    /// An emoji reaction on someone else's message.
+    Reaction,
 }
 
 /// One thing said in the voice call.
@@ -40,9 +42,9 @@ pub struct Utterance {
     pub channel: ChannelId,
     pub source: Source,
     pub said: String,
-    /// The chat message, for text.
+    /// The chat message, for text; for a reaction, the message reacted to.
     pub message: Option<MessageId>,
-    /// What the message replies to, as context for the judge.
+    /// What the message replies to (or the reaction is on), as context for the judge.
     pub in_reply_to: Option<String>,
     /// For voice: the call it was said in.
     pub call: Option<Call>,
@@ -57,6 +59,10 @@ const VOICE_QUESTION: &str = "The state is a moment in a Discord voice call on a
     `people_in_call` is who's there, and `recent_conversation` is what some of them said just \
     before (it may be missing lines). Everything is speech-to-text and may contain mishearings. \
     In `said_now`, was `speaker` not nice to someone?";
+const REACTION_QUESTION: &str = "The state is an emoji `reaction` that a member of a community \
+    server with a be-nice-to-each-other rule this month put on someone else's Discord message \
+    (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`. Is the \
+    member who reacted being not nice to someone with this reaction?";
 pub const YES: &str = "Not nice: insulting, mocking, belittling or putting someone down, \
     name-calling, slurs, threats, telling someone to shut up, go away or die, rudely dismissing \
     them, or contempt aimed at a person or group, including mean comments passed off as jokes";
@@ -68,6 +74,7 @@ pub fn question(source: Source) -> &'static str {
     match source {
         Source::Message | Source::Edit => TEXT_QUESTION,
         Source::Voice => VOICE_QUESTION,
+        Source::Reaction => REACTION_QUESTION,
     }
 }
 
@@ -96,15 +103,22 @@ pub fn quote(said: &str) -> String {
 
 /// The public call-out posted to the announce channel.
 pub fn announcement(u: &Utterance, timeout_secs: u64) -> String {
-    let place = match u.source {
-        Source::Voice => format!("in 🔊 <#{}>", u.channel),
-        Source::Message => format!("in <#{}>", u.channel),
-        Source::Edit => format!("in an edit in <#{}>", u.channel),
+    let (did, quoted) = match u.source {
+        Source::Voice => (format!("said in 🔊 <#{}>", u.channel), u.said.as_str()),
+        Source::Message => (format!("said in <#{}>", u.channel), u.said.as_str()),
+        Source::Edit => (
+            format!("said in an edit in <#{}>", u.channel),
+            u.said.as_str(),
+        ),
+        Source::Reaction => (
+            format!("reacted {} in <#{}> to", u.said, u.channel),
+            u.in_reply_to.as_deref().unwrap_or_default(),
+        ),
     };
     format!(
-        "🚫 **Not nice!** <@{}> said {place}:\n{}\n→ timed out for {timeout_secs}s",
+        "🚫 **Not nice!** <@{}> {did}:\n{}\n→ timed out for {timeout_secs}s",
         u.user,
-        quote(&u.said)
+        quote(quoted)
     )
 }
 
@@ -159,6 +173,7 @@ mod tests {
         assert_eq!(question(Source::Message), TEXT_QUESTION);
         assert_eq!(question(Source::Edit), TEXT_QUESTION);
         assert_eq!(question(Source::Voice), VOICE_QUESTION);
+        assert_eq!(question(Source::Reaction), REACTION_QUESTION);
     }
 
     #[test]
@@ -180,6 +195,12 @@ mod tests {
         );
         assert!(announcement(&utterance(Source::Message, "x"), 10).contains("said in <#9>:"));
         assert!(announcement(&utterance(Source::Edit, "x"), 10).contains("in an edit in <#9>"));
+        let mut r = utterance(Source::Reaction, "🖕");
+        r.in_reply_to = Some("I won".into());
+        assert_eq!(
+            announcement(&r, 10),
+            "🚫 **Not nice!** <@7> reacted 🖕 in <#9> to:\n> I won\n→ timed out for 10s"
+        );
     }
 
     #[test]

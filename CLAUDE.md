@@ -31,8 +31,8 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
 
 - **Participant**: a member holding the guild's participant role. Only participants are judged
   and timed out.
-- **Utterance**: something a participant said, in chat (a message or an edit) or out loud in the
-  monitored voice channel (a transcribed speech segment).
+- **Utterance**: something a participant said, in chat (a message, an edit, or an emoji reaction on
+  someone else's message) or out loud in the monitored voice channel (a transcribed speech segment).
 - **Hostile** (in the code; "not nice" to users): Jev scored the utterance at or above the guild's
   threshold for being not nice to someone.
 - **Call**: the voice moment an utterance was said in: the speaker, who's in the channel, and the

@@ -10,8 +10,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
 
 ## Features
 
-- **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits and speech
-  are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
+- **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits, emoji
+  reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
   Swearing at a game is fine. Swearing at a person isn't.
 - **Always listening in voice.** The bot sits in one voice channel all the time and transcribes
   each thing a participant says locally with [Whisper](https://github.com/ggerganov/whisper.cpp).
@@ -31,7 +31,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Step | Chat | Voice |
 |---|---|---|
 | Who | Participants only (the participant role) | Participants in the monitored channel |
-| What's judged | Every new message (with the message it replies to), and edits that change the text | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
+| What's judged | Every new message (with the message it replies to), edits that change the text, and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
 | Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
 | Then | 10s timeout, quote in the announce channel, details in the log channel | Same, and server-muted until it ends |
 
@@ -47,7 +47,8 @@ Only members with the participant role are judged, and only their audio is trans
 everyone else in the channel is dropped without being transcribed.
 
 - **Sent to [Jev](https://typesafe.ai):** participants' message text, the text of the message they
-  replied to, attached images and embed previews (GIFs, link thumbnails), edits, and transcripts of
+  replied to, attached images and embed previews (GIFs, link thumbnails), edits, their reactions
+  with the message (and images) they reacted to, and transcripts of
   what they said in VC, with the display names of everyone in the call and the last few lines
   participants said. Audio never leaves your server.
 - **Posted publicly:** each hostile message or transcript, quoted in the announce channel.
@@ -194,7 +195,7 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `typing`, `command`, `thread_create` | Who typed where, which slash command was used, new threads |
 | `member_seen` / `member_join` / `member_leave` / `member_update` | Names, nick and roles (snapshot at startup, then changes) |
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
-| `judged` | A Jev verdict: `source` (message/edit/voice), `said`, `score`, `hostile`, `threshold`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
+| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
 | `hostile` | Something hostile: what was `said`, `score`, timeout `method` (native/forced), `muted`, `announced` |
 | `timed_out` / `timeout_released` | Each timeout: `method`, `secs`, `until`, why a native one was refused; and when it was lifted |
