@@ -1,0 +1,26 @@
+[package]
+name = "nicenovember"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+dashmap = "6"
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+poise = "0.7"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serenity = { version = "0.12", default-features = false, features = ["default_no_backend", "rustls_backend", "voice", "chrono"] }
+songbird = { version = "0.6", features = ["receive"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+whisper-rs = "0.16"
