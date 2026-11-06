@@ -52,6 +52,9 @@ pub mod kind {
     pub const VC_SESSION: &str = "vc_session";
     /// The bot joined the monitored voice channel (server-wide): `{}`.
     pub const MONITOR_JOINED: &str = "monitor_joined";
+    /// The bot left voice: nobody else was in the monitored channel, or it was unset
+    /// (server-wide): `{}`.
+    pub const MONITOR_LEFT: &str = "monitor_left";
     /// The bot couldn't join the monitored voice channel (server-wide): `{error}`.
     pub const MONITOR_FAILED: &str = "monitor_failed";
 }

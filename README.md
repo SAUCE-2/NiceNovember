@@ -14,8 +14,9 @@ Everything that happens is logged, so you can build stats from it at the end of 
 - **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits, emoji
   reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
   Swearing at a game is fine. Swearing at a person isn't.
-- **Always listening in voice.** The bot sits in one voice channel all the time and transcribes
-  each thing a participant says locally with [Whisper](https://github.com/ggerganov/whisper.cpp).
+- **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
+  leaves when it's empty), and transcribes each thing a participant says locally with
+  [Whisper](https://github.com/ggerganov/whisper.cpp).
 - **Judged in context.** Each line is judged with who said it, who's in the call, and the last few
   lines of the conversation (up to 8, from the last 45 seconds), so "shut up" answering a joke
   reads differently from "shut up" aimed at someone.
@@ -159,8 +160,8 @@ The bot posts a setup checklist when it joins your server. To set it up in one g
 /nice setup role:@Participants announce_channel:#hall-of-shame log_channel:#mod-log voice_channel:🔊General
 ```
 
-It joins the voice channel straight away and stays there. If it's moved or kicked out, it comes back
-within 30 seconds.
+It joins the voice channel as soon as someone's in it, and leaves once nobody else is. If it's moved
+or kicked out while people are there, it comes back within 30 seconds.
 
 ### Tuning the threshold
 
@@ -207,7 +208,7 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `timed_out` / `timeout_released` | Each timeout: `secs`, `until`, `muted`; and when it was lifted |
 | `timeout_message` / `timeout_reaction` / `timeout_vc` | Tried to talk, react or join VC while timed out |
 | `pardoned` | An admin ended a timeout early (`by`) |
-| `monitor_joined` / `monitor_failed` | The bot joined the monitored voice channel, or couldn't |
+| `monitor_joined` / `monitor_left` / `monitor_failed` | The bot joined the monitored voice channel, left voice, or couldn't join |
 
 To get the data out, run `/log export`. It gives you a `.jsonl.gz` file with one JSON object per
 line. If it's over Discord's 10 MB upload limit, copy the database instead (see above) and query it
