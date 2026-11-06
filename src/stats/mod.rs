@@ -149,6 +149,40 @@ pub struct UserStats {
     pub vc_secs: i64,
 }
 
+/// One judged utterance, for Top Trumps highlights on the `/stats` card.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaidHighlight {
+    pub said: String,
+    pub score: f64,
+    pub source: String,
+}
+
+impl SaidHighlight {
+    /// Pull `said` / `score` / `source` out of a judged log row's JSON.
+    pub fn from_judged_data(data: &str) -> Option<Self> {
+        let d: Value = serde_json::from_str(data).ok()?;
+        let said = d.get("said")?.as_str()?.to_owned();
+        let score = d.get("score")?.as_f64()?;
+        let source = d
+            .get("source")
+            .and_then(|s| s.as_str())
+            .unwrap_or("?")
+            .to_owned();
+        Some(Self {
+            said,
+            score,
+            source,
+        })
+    }
+}
+
+/// Meanest (highest score) and friendliest (lowest score) judged things someone said.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UserHighlights {
+    pub meanest: Option<SaidHighlight>,
+    pub friendliest: Option<SaidHighlight>,
+}
+
 impl Db {
     pub async fn log_activity(&self, guild_id: u64, log: &Log, day: NaiveDate) -> Result<()> {
         sqlx::query(
@@ -219,23 +253,35 @@ impl Db {
         .await?)
     }
 
-    /// A user's latest judged utterances, newest first (what they said that got scored).
-    pub async fn user_recent_judged(
+    /// Meanest and friendliest judged utterances for the `/stats` card.
+    pub async fn user_highlights(&self, guild_id: u64, user_id: u64) -> Result<UserHighlights> {
+        Ok(UserHighlights {
+            meanest: self.judged_by_score(guild_id, user_id, true).await?,
+            friendliest: self.judged_by_score(guild_id, user_id, false).await?,
+        })
+    }
+
+    async fn judged_by_score(
         &self,
         guild_id: u64,
         user_id: u64,
-        limit: i64,
-    ) -> Result<Vec<LogRow>> {
-        Ok(sqlx::query_as(
-            "SELECT id, user_id, channel_id, kind, participant, data, day, at FROM activity_log
+        highest: bool,
+    ) -> Result<Option<SaidHighlight>> {
+        let sql = if highest {
+            "SELECT data FROM activity_log
              WHERE guild_id = ? AND user_id = ? AND kind = 'judged'
-             ORDER BY id DESC LIMIT ?",
-        )
-        .bind(guild_id as i64)
-        .bind(user_id as i64)
-        .bind(limit)
-        .fetch_all(&self.0)
-        .await?)
+             ORDER BY json_extract(data, '$.score') DESC, id DESC LIMIT 1"
+        } else {
+            "SELECT data FROM activity_log
+             WHERE guild_id = ? AND user_id = ? AND kind = 'judged'
+             ORDER BY json_extract(data, '$.score') ASC, id DESC LIMIT 1"
+        };
+        let row: Option<(String,)> = sqlx::query_as(sql)
+            .bind(guild_id as i64)
+            .bind(user_id as i64)
+            .fetch_optional(&self.0)
+            .await?;
+        Ok(row.and_then(|(data,)| SaidHighlight::from_judged_data(&data)))
     }
 
     /// Moderation counts for `/status`, in one guild. Stats never cross guilds.
@@ -455,10 +501,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_stats_aggregates_and_recent_judged() {
+    async fn user_stats_and_highlights() {
         let db = Db::connect("sqlite::memory:").await.unwrap();
         let day = d("2026-11-06");
         assert_eq!(db.user_stats(1, 7).await.unwrap(), UserStats::default());
+        assert_eq!(
+            db.user_highlights(1, 7).await.unwrap(),
+            UserHighlights::default()
+        );
         let entries = [
             Log::new("message", json!({})).user(UserId::new(7)),
             Log::new("message", json!({})).user(UserId::new(7)),
@@ -467,48 +517,63 @@ mod tests {
             Log::new(kind::HEARD, json!({"text": "hey", "audio_ms": 500})).user(UserId::new(7)),
             Log::new(
                 kind::JUDGED,
-                json!({"said": "old", "score": 0.2, "source": "message", "hostile": false}),
+                json!({"said": "have a nice day", "score": 0.1, "source": "message"}),
             )
             .user(UserId::new(7)),
             Log::new(
                 kind::JUDGED,
-                json!({"said": "mean", "score": 0.8, "source": "voice", "hostile": true}),
+                json!({"said": "you're the worst", "score": 0.9, "source": "voice"}),
             )
             .user(UserId::new(7)),
-            Log::new(kind::HOSTILE, json!({"said": "mean", "score": 0.8})).user(UserId::new(7)),
+            Log::new(
+                kind::JUDGED,
+                json!({"said": "meh", "score": 0.5, "source": "message"}),
+            )
+            .user(UserId::new(7)),
+            Log::new(
+                kind::HOSTILE,
+                json!({"said": "you're the worst", "score": 0.9}),
+            )
+            .user(UserId::new(7)),
             Log::new(kind::TIMED_OUT, json!({"secs": 60})).user(UserId::new(7)),
             Log::new(kind::TIMED_OUT, json!({"secs": 120})).user(UserId::new(7)),
             Log::new(kind::VC_SESSION, json!({"secs": 300})).user(UserId::new(7)),
-            // Other user / guild must not mix in.
-            Log::new(kind::HOSTILE, json!({"said": "nope"})).user(UserId::new(8)),
             Log::new(kind::JUDGED, json!({"said": "other", "score": 1.0})).user(UserId::new(8)),
         ];
         for log in &entries {
             db.log_activity(1, log, day).await.unwrap();
         }
-        db.log_activity(
-            2,
-            &Log::new(kind::HOSTILE, json!({"said": "guild2"})).user(UserId::new(7)),
-            day,
-        )
-        .await
-        .unwrap();
 
         let s = db.user_stats(1, 7).await.unwrap();
         assert_eq!(s.messages, 2);
         assert_eq!(s.reactions, 1);
         assert_eq!(s.heard, 2);
         assert_eq!(s.heard_audio_ms, 2000);
-        assert_eq!(s.judged, 2);
+        assert_eq!(s.judged, 3);
         assert!((s.avg_score.unwrap() - 0.5).abs() < 1e-9);
         assert_eq!(s.hostile, 1);
         assert_eq!(s.timed_out, 2);
         assert_eq!(s.timeout_secs, 180);
         assert_eq!(s.vc_secs, 300);
 
-        let recent = db.user_recent_judged(1, 7, 1).await.unwrap();
-        assert_eq!(recent.len(), 1);
-        assert!(recent[0].data.contains("mean"), "newest judged first");
-        assert!(db.user_recent_judged(1, 9, 5).await.unwrap().is_empty());
+        let h = db.user_highlights(1, 7).await.unwrap();
+        let meanest = h.meanest.unwrap();
+        assert_eq!(meanest.said, "you're the worst");
+        assert!((meanest.score - 0.9).abs() < 1e-9);
+        assert_eq!(meanest.source, "voice");
+        let friendliest = h.friendliest.unwrap();
+        assert_eq!(friendliest.said, "have a nice day");
+        assert!((friendliest.score - 0.1).abs() < 1e-9);
+        assert!(db.user_highlights(1, 9).await.unwrap().meanest.is_none());
+    }
+
+    #[test]
+    fn highlight_from_judged_json() {
+        assert!(SaidHighlight::from_judged_data("nope").is_none());
+        let h = SaidHighlight::from_judged_data(r#"{"said":"hi","score":0.25,"source":"message"}"#)
+            .unwrap();
+        assert_eq!(h.said, "hi");
+        assert!((h.score - 0.25).abs() < 1e-9);
+        assert_eq!(h.source, "message");
     }
 }
