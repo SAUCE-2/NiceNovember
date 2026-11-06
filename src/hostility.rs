@@ -102,7 +102,7 @@ pub fn quote(said: &str) -> String {
 }
 
 /// The public call-out posted to the announce channel.
-pub fn announcement(u: &Utterance, timeout_secs: u64) -> String {
+pub fn announcement(u: &Utterance) -> String {
     let (did, quoted) = match u.source {
         Source::Voice => (format!("said in 🔊 <#{}>", u.channel), u.said.as_str()),
         Source::Message => (format!("said in <#{}>", u.channel), u.said.as_str()),
@@ -115,11 +115,7 @@ pub fn announcement(u: &Utterance, timeout_secs: u64) -> String {
             u.in_reply_to.as_deref().unwrap_or_default(),
         ),
     };
-    format!(
-        "🚫 **Not nice!** <@{}> {did}:\n{}\n→ timed out for {timeout_secs}s",
-        u.user,
-        quote(quoted)
-    )
+    format!("🚫 **Not nice!** <@{}> {did}:\n{}", u.user, quote(quoted))
 }
 
 /// Whisper's non-speech markers like `[BLANK_AUDIO]`, `(music)` or `*coughs*`, and leftover
@@ -190,16 +186,16 @@ mod tests {
     #[test]
     fn announcements_say_where() {
         assert_eq!(
-            announcement(&utterance(Source::Voice, "shut up"), 10),
-            "🚫 **Not nice!** <@7> said in 🔊 <#9>:\n> shut up\n→ timed out for 10s"
+            announcement(&utterance(Source::Voice, "shut up")),
+            "🚫 **Not nice!** <@7> said in 🔊 <#9>:\n> shut up"
         );
-        assert!(announcement(&utterance(Source::Message, "x"), 10).contains("said in <#9>:"));
-        assert!(announcement(&utterance(Source::Edit, "x"), 10).contains("in an edit in <#9>"));
+        assert!(announcement(&utterance(Source::Message, "x")).contains("said in <#9>:"));
+        assert!(announcement(&utterance(Source::Edit, "x")).contains("in an edit in <#9>"));
         let mut r = utterance(Source::Reaction, "🖕");
         r.in_reply_to = Some("I won".into());
         assert_eq!(
-            announcement(&r, 10),
-            "🚫 **Not nice!** <@7> reacted 🖕 in <#9> to:\n> I won\n→ timed out for 10s"
+            announcement(&r),
+            "🚫 **Not nice!** <@7> reacted 🖕 in <#9> to:\n> I won"
         );
     }
 
