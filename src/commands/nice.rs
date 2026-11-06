@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use poise::CreateReply;
 use poise::serenity_prelude::{
     self as serenity, Channel, CreateAllowedMentions, CreateEmbed, Role,
@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use crate::app::Ctx;
 use crate::db::{Clear, DEFAULT_THRESHOLD, SetupChanges};
-use crate::hostility::{self, Call, NO, Source, Utterance, YES};
 use crate::stats::kind;
 use crate::voice::monitor;
 use crate::{setup, timeout};
@@ -33,7 +32,7 @@ async fn reply(ctx: Ctx<'_>, text: impl Into<String>) -> Result<()> {
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("setup", "unset", "pardon", "recent", "check"),
+    subcommands("setup", "unset", "pardon", "recent"),
     subcommand_required
 )]
 pub async fn nice(_ctx: Ctx<'_>) -> Result<()> {
@@ -195,56 +194,6 @@ async fn recent(
     )
     .await?;
     Ok(())
-}
-
-/// See whether Jev thinks some text is not nice, without timing anyone out.
-#[poise::command(slash_command, required_permissions = "ADMINISTRATOR")]
-async fn check(
-    ctx: Ctx<'_>,
-    #[description = "What someone might say"] text: String,
-    #[description = "Judge it as speech in VC instead of a chat message"] spoken: Option<bool>,
-) -> Result<()> {
-    let guild_id = guild(ctx)?;
-    let data = ctx.data();
-    if data.jev.is_none() {
-        bail!("`JEV_API_KEY` isn't set on the bot");
-    }
-    ctx.defer_ephemeral().await.ok();
-    let u = Utterance {
-        user: ctx.author().id,
-        channel: ctx.channel_id(),
-        source: if spoken.unwrap_or(false) {
-            Source::Voice
-        } else {
-            Source::Message
-        },
-        said: text.clone(),
-        message: None,
-        in_reply_to: None,
-        call: spoken.unwrap_or(false).then(|| Call {
-            speaker: ctx.author().display_name().to_owned(),
-            ..Call::default()
-        }),
-    };
-    let state = crate::ai::state_for(&u, &[]);
-    let question = hostility::question(u.source);
-    let score = crate::ai::ask_noul(data, state, vec![], question, Some((YES, NO)))
-        .await
-        .context("Jev didn't answer; try again")?;
-    let threshold = data.db.guild(guild_id.get()).await?.threshold();
-    let verdict = if hostility::is_hostile(score, threshold) {
-        "🚫 not nice: that would get a timeout"
-    } else {
-        "🤝 fine"
-    };
-    reply(
-        ctx,
-        format!(
-            "{}\nJev: **{score:.2}** (threshold {threshold:.2}) → {verdict}",
-            hostility::quote(&text)
-        ),
-    )
-    .await
 }
 
 #[cfg(test)]
