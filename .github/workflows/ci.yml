@@ -78,6 +78,7 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
+          build-args: GIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
