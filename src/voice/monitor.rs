@@ -225,6 +225,7 @@ async fn join(
     st: &Shared,
     channel: ChannelId,
 ) {
+    leave_first(ctx, guild_id, manager).await;
     // Listen before joining: Discord says which SSRC is whose while the connection is being set
     // up, and doesn't say it again for anyone already in the channel. Reset first, so none of it
     // is wiped.
@@ -261,6 +262,42 @@ async fn join(
         }
     };
     stats::record(data, guild_id, log.channel(channel)).await;
+}
+
+/// If Discord still has the bot in voice (e.g. from before a restart, or a dead session), leave
+/// and wait until it says the bot is out: joining on top of that voice state gets no new session,
+/// and a "left voice" arriving mid-join cancels the join.
+async fn leave_first(ctx: &serenity::Context, guild_id: GuildId, manager: &songbird::Songbird) {
+    if !in_voice(ctx, guild_id) {
+        return;
+    }
+    tracing::info!(%guild_id, "leaving voice to rejoin afresh");
+    // The lock must be released before waiting: songbird takes it to handle Discord's reply.
+    manager
+        .get_or_insert(guild_id)
+        .lock()
+        .await
+        .leave()
+        .await
+        .ok();
+    // Serenity hands each voice state update to songbird before caching it, so once the cache
+    // says the bot is out, songbird is done with the "left" and can't cancel the join.
+    // ponytail: polls the cache; a missing reply just costs 5 s before joining anyway.
+    for _ in 0..50 {
+        if !in_voice(ctx, guild_id) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    tracing::warn!(%guild_id, "Discord didn't confirm leaving voice; joining anyway");
+}
+
+/// Whether Discord has the bot in a voice channel in this server.
+fn in_voice(ctx: &serenity::Context, guild_id: GuildId) -> bool {
+    let me = ctx.cache.current_user().id;
+    ctx.cache
+        .guild(guild_id)
+        .is_some_and(|g| g.voice_states.contains_key(&me))
 }
 
 /// Every server with a monitored channel set.
