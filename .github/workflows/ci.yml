@@ -52,7 +52,6 @@ jobs:
           tags: nicenovember:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static
       - run: scripts/check-portable.sh nicenovember:ci
 
   # Only main publishes an image; the Steam Machine's update timer pulls :latest. Each one is also
@@ -95,7 +94,6 @@ jobs:
             ${{ env.IMAGE }}:${{ env.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static
       - run: scripts/check-portable.sh "$IMAGE:latest"
       # The git tag goes last, so a version is only taken once its image is out.
       - run: docker push --all-tags "$IMAGE" && git push origin "HEAD:refs/tags/v$VERSION"
