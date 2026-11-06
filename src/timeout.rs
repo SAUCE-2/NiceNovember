@@ -314,10 +314,10 @@ pub async fn on_message(ctx: &serenity::Context, data: &Data, msg: &Message) -> 
     Ok(true)
 }
 
-/// A timed-out user reacted: take it back off.
-pub async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> Result<()> {
+/// A timed-out user reacted: take it back off. Returns whether it did.
+pub async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> Result<bool> {
     let (Some(guild_id), Some(user)) = (r.guild_id, r.user_id) else {
-        return Ok(());
+        return Ok(false);
     };
     if data
         .db
@@ -325,7 +325,7 @@ pub async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> 
         .await?
         .is_none()
     {
-        return Ok(());
+        return Ok(false);
     }
     r.delete(ctx).await.ok();
     let log = Log::new(
@@ -335,7 +335,7 @@ pub async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> 
     .user(user)
     .channel(r.channel_id);
     stats::record(data, guild_id, log).await;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

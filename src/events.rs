@@ -1,9 +1,10 @@
-//! Routes Discord events: everything is logged, timeouts are enforced, participants' messages
-//! and edits are judged, and the voice monitor is kept in its channel.
+//! Routes Discord events: everything is logged, timeouts are enforced, participants' messages,
+//! edits and reactions are judged, and the voice monitor is kept in its channel.
 
 use anyhow::Result;
 use poise::serenity_prelude::{
-    self as serenity, FullEvent, GuildId, Message, MessageUpdateEvent, VoiceState,
+    self as serenity, FullEvent, GuildId, Message, MessageUpdateEvent, Reaction, ReactionType,
+    VoiceState,
 };
 
 use crate::app::Data;
@@ -29,9 +30,7 @@ pub async fn handle(ctx: &serenity::Context, event: &FullEvent, data: &Data) -> 
             event,
             ..
         } => on_edit(ctx, data, event, old_if_available.as_ref()).await?,
-        FullEvent::ReactionAdd { add_reaction } => {
-            timeout::on_reaction(ctx, data, add_reaction).await?
-        }
+        FullEvent::ReactionAdd { add_reaction } => on_reaction(ctx, data, add_reaction).await?,
         FullEvent::VoiceStateUpdate { old, new } => on_voice(ctx, data, old.as_ref(), new).await?,
         _ => {}
     }
@@ -109,6 +108,42 @@ async fn on_edit(
     judge::judge(ctx, data, guild_id, u, vec![]).await
 }
 
+/// An emoji as people see it: the character itself, or `:name:` for a custom one.
+pub fn emoji_text(emoji: &ReactionType) -> String {
+    match emoji {
+        ReactionType::Custom { name: Some(n), .. } => format!(":{n}:"),
+        other => other.to_string(),
+    }
+}
+
+async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> Result<()> {
+    let (Some(guild_id), Some(user)) = (r.guild_id, r.user_id) else {
+        return Ok(());
+    };
+    if timeout::on_reaction(ctx, data, r).await?
+        || r.member.as_ref().is_some_and(|m| m.user.bot)
+        || r.message_author_id == Some(user)
+    {
+        return Ok(());
+    }
+    let roles = r.member.as_ref().map(|m| m.roles.as_slice());
+    if !is_participant(ctx, data, guild_id, user, roles).await? {
+        return Ok(());
+    }
+    let on = r.message(ctx).await?;
+    let images = crate::ai::message_images(&on).await;
+    let u = Utterance {
+        user,
+        channel: r.channel_id,
+        source: Source::Reaction,
+        said: emoji_text(&r.emoji),
+        message: Some(r.message_id),
+        in_reply_to: Some(on.content),
+        call: None,
+    };
+    judge::judge(ctx, data, guild_id, u, images).await
+}
+
 async fn on_voice(
     ctx: &serenity::Context,
     data: &Data,
@@ -153,6 +188,14 @@ mod tests {
             v["edited_timestamp"] = json!("2026-11-06T10:00:00Z");
         }
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn emoji_are_shown_as_people_see_them() {
+        assert_eq!(emoji_text(&ReactionType::Unicode("🖕".into())), "🖕");
+        let custom: ReactionType =
+            serde_json::from_value(json!({ "id": "5", "name": "clown_cry" })).unwrap();
+        assert_eq!(emoji_text(&custom), ":clown_cry:");
     }
 
     #[test]
