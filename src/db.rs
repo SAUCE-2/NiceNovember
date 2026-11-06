@@ -21,6 +21,8 @@ pub struct GuildConfig {
     pub voice_channel_id: Option<i64>,
     pub threshold: Option<f64>,
     pub last_setup_hash: Option<String>,
+    /// Judge as usual, but only report would-be timeouts to the log channel.
+    pub shadow: bool,
 }
 
 impl GuildConfig {
@@ -50,6 +52,7 @@ pub struct SetupChanges {
     pub log_channel: Option<u64>,
     pub voice_channel: Option<u64>,
     pub threshold: Option<f32>,
+    pub shadow: Option<bool>,
 }
 
 /// The optional settings `/nice unset` can clear.
@@ -131,7 +134,7 @@ impl Db {
     pub async fn guild(&self, guild_id: u64) -> Result<GuildConfig> {
         let row = sqlx::query_as::<_, GuildConfig>(
             "SELECT participant_role_id, announce_channel_id, log_channel_id, voice_channel_id,
-                    threshold, last_setup_hash
+                    threshold, last_setup_hash, shadow
              FROM guild_config WHERE guild_id = ?",
         )
         .bind(guild_id as i64)
@@ -208,6 +211,16 @@ impl Db {
         }
         if let Some(t) = c.threshold {
             self.set_threshold(guild_id, Some(t)).await?;
+        }
+        if let Some(on) = c.shadow {
+            sqlx::query(
+                "INSERT INTO guild_config (guild_id, shadow) VALUES (?1, ?2)
+                 ON CONFLICT (guild_id) DO UPDATE SET shadow = excluded.shadow",
+            )
+            .bind(guild_id as i64)
+            .bind(on)
+            .execute(&self.0)
+            .await?;
         }
         Ok(())
     }
@@ -393,7 +406,9 @@ mod tests {
             log_channel: Some(3),
             voice_channel: Some(4),
             threshold: Some(0.4),
+            shadow: Some(true),
         };
+        assert!(!db.guild(1).await.unwrap().shadow, "off by default");
         db.apply_setup(1, &all).await.unwrap();
         let only_voice = SetupChanges {
             voice_channel: Some(5),
@@ -401,6 +416,7 @@ mod tests {
         };
         db.apply_setup(1, &only_voice).await.unwrap();
         let g = db.guild(1).await.unwrap();
+        assert!(g.shadow, "left as it was");
         assert_eq!(
             (
                 g.participant_role_id,
@@ -420,6 +436,13 @@ mod tests {
         let g = db.guild(1).await.unwrap();
         assert_eq!(g.threshold(), DEFAULT_THRESHOLD);
         assert_eq!(g.participant_role_id, Some(1), "the rest stays");
+
+        let off = SetupChanges {
+            shadow: Some(false),
+            ..Default::default()
+        };
+        db.apply_setup(1, &off).await.unwrap();
+        assert!(!db.guild(1).await.unwrap().shadow);
     }
 
     #[tokio::test]
