@@ -1,9 +1,10 @@
-//! The monitored voice channel: the bot sits in one VC per server all the time and listens.
-//! Discord sends each speaker's audio separately (by SSRC); the [`Segmenter`] cuts it into one
-//! segment per thing said, and each segment is transcribed by Whisper and judged like a message.
+//! The monitored voice channel: the bot sits in one VC per server while anyone's in it, and
+//! listens. Discord sends each speaker's audio separately (by SSRC); the [`Segmenter`] cuts it into
+//! one segment per thing said, and each segment is transcribed by Whisper and judged like a message.
 //!
 //! [`ensure`] is the only thing that joins or leaves. It's called on startup, when the setting
-//! changes, when the bot is moved or kicked, and every 30 s as a watchdog.
+//! changes, when anyone joins or leaves voice, when the bot is moved or kicked, and every 30 s as a
+//! watchdog.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -183,7 +184,8 @@ impl VoiceMonitor {
     }
 }
 
-/// Make the bot sit in the guild's monitored channel (or leave VC if none is set).
+/// Make the bot sit in the guild's monitored channel while anyone's in it (or leave VC if nobody
+/// is, or none is set).
 pub async fn ensure(ctx: &serenity::Context, data: &Data, guild_id: GuildId) -> Result<()> {
     let lock = data.monitor.joins.entry(guild_id).or_default().clone();
     let _held = lock.lock().await;
@@ -195,7 +197,12 @@ pub async fn ensure(ctx: &serenity::Context, data: &Data, guild_id: GuildId) -> 
         .guild(guild_id.get())
         .await?
         .voice_channel_id
-        .map(|c| ChannelId::new(c as u64));
+        .map(|c| ChannelId::new(c as u64))
+        .filter(|&c| {
+            ctx.cache
+                .guild(guild_id)
+                .is_some_and(|g| people_in(&g, c).next().is_some())
+        });
     let current = match manager.get(guild_id) {
         Some(call) => call
             .lock()
@@ -211,6 +218,10 @@ pub async fn ensure(ctx: &serenity::Context, data: &Data, guild_id: GuildId) -> 
         Step::Leave => {
             manager.remove(guild_id).await.ok();
             st.lock().unwrap().channel = None;
+            tracing::info!(%guild_id, "left voice");
+            let mut log = Log::new(kind::MONITOR_LEFT, json!({}));
+            log.channel = current.or(listening).map(ChannelId::get);
+            stats::record(data, guild_id, log).await;
         }
         Step::Join(channel) => join(ctx, data, guild_id, &manager, &st, channel).await,
     }
@@ -394,14 +405,17 @@ fn names_in_call(
             .get(u)
             .map_or_else(|| u.to_string(), |m| m.display_name().to_owned())
     };
-    let in_call = g
-        .voice_states
-        .values()
-        .filter(|v| v.channel_id == Some(channel))
-        .filter(|v| !g.members.get(&v.user_id).is_some_and(|m| m.user.bot))
-        .map(|v| name(&v.user_id))
-        .collect();
+    let in_call = people_in(&g, channel).map(|u| name(&u)).collect();
     (name(&speaker), in_call)
+}
+
+/// Everyone in `channel` but bots (this one included).
+fn people_in(g: &serenity::Guild, channel: ChannelId) -> impl Iterator<Item = UserId> + '_ {
+    g.voice_states
+        .values()
+        .filter(move |v| v.channel_id == Some(channel))
+        .filter(|v| !g.members.get(&v.user_id).is_some_and(|m| m.user.bot))
+        .map(|v| v.user_id)
 }
 
 #[derive(Clone)]
@@ -478,6 +492,27 @@ mod tests {
             Step::Join(ChannelId::new(1)),
             "kicked"
         );
+    }
+
+    #[test]
+    fn bots_dont_count_as_people_in_a_channel() {
+        let mut g = serenity::Guild::default();
+        for (user, channel, bot) in [(1, 10, false), (2, 10, true), (3, 20, false)] {
+            let mut m = serenity::Member::default();
+            m.user.bot = bot;
+            g.members.insert(UserId::new(user), m);
+            let vs = serde_json::from_value(json!({
+                "user_id": user.to_string(), "channel_id": channel.to_string(), "session_id": "",
+                "deaf": false, "mute": false, "self_deaf": false, "self_mute": false,
+                "self_video": false, "suppress": false, "request_to_speak_timestamp": null,
+            }))
+            .unwrap();
+            g.voice_states.insert(UserId::new(user), vs);
+        }
+        let people = |c| people_in(&g, ChannelId::new(c)).collect::<Vec<_>>();
+        assert_eq!(people(10), [UserId::new(1)]);
+        assert_eq!(people(20), [UserId::new(3)]);
+        assert!(people(30).is_empty());
     }
 
     #[test]

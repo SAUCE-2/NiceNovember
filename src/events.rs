@@ -168,6 +168,9 @@ async fn on_voice(
     if let Some(ch) = old_ch {
         data.monitor.user_left(guild_id, new.user_id, ch);
     }
+    // Someone came or went: the bot joins the monitored channel only while anyone's in it.
+    let (c, d) = (ctx.clone(), data.clone());
+    tokio::spawn(async move { monitor::ensure(&c, &d, guild_id).await });
     if new.channel_id.is_some() {
         timeout::on_voice_join(ctx, data, guild_id, new.user_id).await?;
     }
