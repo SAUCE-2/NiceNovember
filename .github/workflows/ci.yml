@@ -23,7 +23,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # Cached build-script output pins where native libs were found (e.g. a system libopus), so the
+      # key changes whenever the job's installed packages do.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: no-apt
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
