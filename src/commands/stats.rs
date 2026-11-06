@@ -17,20 +17,9 @@ fn guild(ctx: Ctx<'_>) -> Result<serenity::GuildId> {
     ctx.guild_id().context("use this in a server")
 }
 
-/// Activity log and per-user stats.
-#[poise::command(
-    slash_command,
-    guild_only,
-    subcommands("user", "summary", "export", "wipe"),
-    subcommand_required
-)]
-pub async fn stats(_ctx: Ctx<'_>) -> Result<()> {
-    Ok(())
-}
-
 /// Aggregated stats for a user: messages, VC, judgements, and recent things they said.
-#[poise::command(slash_command)]
-async fn user(
+#[poise::command(slash_command, guild_only)]
+pub async fn stats(
     ctx: Ctx<'_>,
     #[description = "Whose stats to show"] user: serenity::User,
     #[description = "How many recent judged things to show (default 10)"]
@@ -55,18 +44,31 @@ async fn user(
         .title(format!("📊 Stats · {}", user.display_name()))
         .description(text)
         .colour(0x3498db);
+    // Channel-visible on purpose: this is the public call-out of how nice they've been.
     ctx.send(
         CreateReply::default()
             .embed(embed)
-            .ephemeral(true)
             .allowed_mentions(CreateAllowedMentions::new()),
     )
     .await?;
     Ok(())
 }
 
+/// The activity log (admin).
+#[poise::command(
+    slash_command,
+    guild_only,
+    subcommands("summary", "export", "wipe"),
+    subcommand_required,
+    default_member_permissions = "ADMINISTRATOR",
+    required_permissions = "ADMINISTRATOR"
+)]
+pub async fn log(_ctx: Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
 /// How much has been logged, by kind.
-#[poise::command(slash_command, required_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command)]
 async fn summary(ctx: Ctx<'_>) -> Result<()> {
     let guild_id = guild(ctx)?;
     let counts = ctx.data().db.activity_counts(guild_id.get()).await?;
@@ -80,7 +82,7 @@ async fn summary(ctx: Ctx<'_>) -> Result<()> {
 }
 
 /// Download the activity log as gzipped JSON Lines.
-#[poise::command(slash_command, required_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command)]
 async fn export(ctx: Ctx<'_>) -> Result<()> {
     let guild_id = guild(ctx)?;
     let data = ctx.data();
@@ -115,7 +117,7 @@ async fn export(ctx: Ctx<'_>) -> Result<()> {
 }
 
 /// Delete logged activity (e.g. after testing). Can't be undone.
-#[poise::command(slash_command, required_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command)]
 async fn wipe(
     ctx: Ctx<'_>,
     #[description = "Must be true: this deletes the log for good"] confirm: bool,
@@ -151,7 +153,7 @@ fn format_kind_counts(counts: &[KindCount]) -> String {
     }
     let _ = write!(
         text,
-        "\n**{total}** entries. `/stats export` to download them."
+        "\n**{total}** entries. `/log export` to download them."
     );
     text
 }
@@ -254,6 +256,7 @@ mod tests {
         ]);
         assert!(text.contains("`message` · 3 (2 people)"));
         assert!(text.contains("**4** entries"));
+        assert!(text.contains("`/log export`"));
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! - The bot logs its own events (transcripts, judgements, hostility, timeouts, pardons, the
 //!   voice monitor) with [`record`].
 //!
-//! `/stats export` downloads it all as gzipped JSON Lines; or copy the SQLite database itself.
+//! `/log export` downloads it all as gzipped JSON Lines; or copy the SQLite database itself.
 
 pub mod capture;
 pub mod sessions;
@@ -134,7 +134,7 @@ pub struct KindCount {
     pub people: i64,
 }
 
-/// Aggregates for one user in a guild, for `/stats user`.
+/// Aggregates for one user in a guild, for `/stats`.
 #[derive(Clone, Debug, Default, PartialEq, sqlx::FromRow)]
 pub struct UserStats {
     pub messages: i64,
