@@ -2,6 +2,11 @@
 FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config libopus-dev \
     && rm -rf /var/lib/apt/lists/*
+# Build whisper.cpp for any x86-64 CPU with AVX2, not for the build machine's: by default it's tuned
+# with -march=native, so an image built on a CI runner with AVX-512/AMX dies with "Illegal
+# instruction" while loading the model on the Steam Machine's AMD CPU. whisper-rs-sys passes GGML_*
+# variables to whisper.cpp's CMake. scripts/check-portable.sh guards this in CI.
+ENV GGML_NATIVE=OFF
 WORKDIR /app
 
 FROM chef AS planner
