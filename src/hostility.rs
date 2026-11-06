@@ -1,4 +1,5 @@
-//! What counts as hostile, and how it's reported. Pure: no Discord or network calls.
+//! What counts as not nice ("hostile" in the code and the activity log), and how it's
+//! reported. Pure: no Discord or network calls.
 
 use poise::serenity_prelude::{ChannelId, MessageId, UserId};
 use serde::Serialize;
@@ -15,6 +16,23 @@ pub enum Source {
     Voice,
 }
 
+/// One thing said in the voice call.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Line {
+    pub speaker: String,
+    pub said: String,
+}
+
+/// The voice call around something said: who said it, who's there, and what came just before.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Call {
+    pub speaker: String,
+    /// Display names of everyone in the call (bots excluded), speaker included.
+    pub in_call: Vec<String>,
+    /// What participants said just before, oldest first.
+    pub recent: Vec<Line>,
+}
+
 /// Something a participant said, ready to judge.
 #[derive(Clone, Debug)]
 pub struct Utterance {
@@ -26,20 +44,25 @@ pub struct Utterance {
     pub message: Option<MessageId>,
     /// What the message replies to, as context for the judge.
     pub in_reply_to: Option<String>,
+    /// For voice: the call it was said in.
+    pub call: Option<Call>,
 }
 
 const TEXT_QUESTION: &str = "The state is a Discord chat message (possibly with attached images, \
     and the message it replies to for context) from a member of a community server that has a \
-    be-nice rule this month. Is the author of `message_text` being hostile towards someone?";
-const VOICE_QUESTION: &str = "The state is a speech-to-text transcript of something a member of \
-    a community server said out loud in a Discord voice call, during a month with a be-nice rule. \
-    The transcript may contain mishearings. Were they being hostile towards someone?";
-pub const YES: &str = "Hostile: insulting, mocking or belittling someone, name-calling, slurs, \
-    threats, harassment, telling someone to shut up, go away or die, or contempt aimed at a person \
-    or group, including mean comments passed off as jokes";
-pub const NO: &str = "Not hostile: friendly or neutral talk, swearing that isn't aimed at anyone \
-    (\"this game is shit\"), respectful disagreement, self-deprecation, or quoting or discussing \
-    hostility without joining in";
+    be-nice-to-each-other rule this month. Is the author of `message_text` being not nice to \
+    someone?";
+const VOICE_QUESTION: &str = "The state is a moment in a Discord voice call on a community server \
+    that has a be-nice-to-each-other rule this month. `speaker` just said `said_now`. \
+    `people_in_call` is who's there, and `recent_conversation` is what some of them said just \
+    before (it may be missing lines). Everything is speech-to-text and may contain mishearings. \
+    In `said_now`, was `speaker` not nice to someone?";
+pub const YES: &str = "Not nice: insulting, mocking, belittling or putting someone down, \
+    name-calling, slurs, threats, telling someone to shut up, go away or die, rudely dismissing \
+    them, or contempt aimed at a person or group, including mean comments passed off as jokes";
+pub const NO: &str = "Nice or neutral: friendly talk and banter that isn't at anyone's expense, \
+    swearing that isn't aimed at anyone (\"this game is shit\"), respectful disagreement, \
+    self-deprecation, or quoting or talking about someone else being mean without joining in";
 
 pub fn question(source: Source) -> &'static str {
     match source {
@@ -120,6 +143,7 @@ mod tests {
             said: said.into(),
             message: None,
             in_reply_to: None,
+            call: None,
         }
     }
 

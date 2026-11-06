@@ -6,6 +6,7 @@ use poise::serenity_prelude::Message;
 use serde_json::{Value, json};
 
 use crate::app::Data;
+use crate::hostility::{Call, Utterance};
 use jev::{Image, normalize_image, noul};
 
 /// Max images per message sent to Jev (keeps requests small and fast).
@@ -73,6 +74,24 @@ pub fn utterance_state(text: &str, in_reply_to: Option<&str>, images: &[Image]) 
     state
 }
 
+/// Jev `state` for something said in the voice call, with who's there and what came before.
+pub fn voice_state(said: &str, call: &Call) -> Value {
+    json!({
+        "speaker": call.speaker,
+        "said_now": said,
+        "people_in_call": call.in_call,
+        "recent_conversation": call.recent,
+    })
+}
+
+/// Jev `state` for any utterance: the voice form for speech, the chat form otherwise.
+pub fn state_for(u: &Utterance, images: &[Image]) -> Value {
+    match &u.call {
+        Some(call) => voice_state(&u.said, call),
+        None => utterance_state(&u.said, u.in_reply_to.as_deref(), images),
+    }
+}
+
 /// Ask a single yes/no question. `None` if Jev isn't configured or the call failed (logged).
 pub async fn ask_noul(
     data: &Data,
@@ -97,6 +116,7 @@ pub async fn ask_noul(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hostility::Line;
     use poise::serenity_prelude::{Attachment, Embed};
 
     #[test]
@@ -113,6 +133,46 @@ mod tests {
         assert_eq!(
             utterance_state("no u", Some("you're dumb"), &[]),
             json!({ "message_text": "no u", "replying_to_message": "you're dumb" })
+        );
+    }
+
+    #[test]
+    fn voice_state_shape() {
+        let call = Call {
+            speaker: "Sam".into(),
+            in_call: vec!["Sam".into(), "Alex".into()],
+            recent: vec![Line {
+                speaker: "Alex".into(),
+                said: "I carried that round".into(),
+            }],
+        };
+        assert_eq!(
+            voice_state("shut up, you were useless", &call),
+            json!({
+                "speaker": "Sam",
+                "said_now": "shut up, you were useless",
+                "people_in_call": ["Sam", "Alex"],
+                "recent_conversation": [{ "speaker": "Alex", "said": "I carried that round" }],
+            })
+        );
+    }
+
+    #[test]
+    fn state_follows_the_source() {
+        let mut u = Utterance {
+            user: poise::serenity_prelude::UserId::new(1),
+            channel: poise::serenity_prelude::ChannelId::new(2),
+            source: crate::hostility::Source::Voice,
+            said: "hi".into(),
+            message: None,
+            in_reply_to: Some("yo".into()),
+            call: Some(Call::default()),
+        };
+        assert_eq!(state_for(&u, &[])["said_now"], "hi");
+        u.call = None;
+        assert_eq!(
+            state_for(&u, &[]),
+            json!({ "message_text": "hi", "replying_to_message": "yo" })
         );
     }
 

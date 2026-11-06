@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::app::Ctx;
 use crate::db::{Clear, DEFAULT_THRESHOLD, SetupChanges};
-use crate::hostility::{self, NO, Source, YES};
+use crate::hostility::{self, Call, NO, Source, Utterance, YES};
 use crate::stats::kind;
 use crate::voice::monitor;
 use crate::{setup, timeout};
@@ -142,7 +142,7 @@ async fn pardon(ctx: Ctx<'_>, user: serenity::User) -> Result<()> {
     reply(ctx, text).await
 }
 
-/// The latest hostile things people said.
+/// The latest not-nice things people said.
 #[poise::command(slash_command)]
 async fn recent(
     ctx: Ctx<'_>,
@@ -187,7 +187,7 @@ async fn recent(
     Ok(())
 }
 
-/// See how hostile Jev thinks some text is, without timing anyone out.
+/// See whether Jev thinks some text is not nice, without timing anyone out.
 #[poise::command(slash_command, required_permissions = "ADMINISTRATOR")]
 async fn check(
     ctx: Ctx<'_>,
@@ -200,24 +200,30 @@ async fn check(
         bail!("`JEV_API_KEY` isn't set on the bot");
     }
     ctx.defer_ephemeral().await.ok();
-    let source = if spoken.unwrap_or(false) {
-        Source::Voice
-    } else {
-        Source::Message
+    let u = Utterance {
+        user: ctx.author().id,
+        channel: ctx.channel_id(),
+        source: if spoken.unwrap_or(false) {
+            Source::Voice
+        } else {
+            Source::Message
+        },
+        said: text.clone(),
+        message: None,
+        in_reply_to: None,
+        call: spoken.unwrap_or(false).then(|| Call {
+            speaker: ctx.author().display_name().to_owned(),
+            ..Call::default()
+        }),
     };
-    let state = crate::ai::utterance_state(&text, None, &[]);
-    let score = crate::ai::ask_noul(
-        data,
-        state,
-        vec![],
-        hostility::question(source),
-        Some((YES, NO)),
-    )
-    .await
-    .context("Jev didn't answer; try again")?;
+    let state = crate::ai::state_for(&u, &[]);
+    let question = hostility::question(u.source);
+    let score = crate::ai::ask_noul(data, state, vec![], question, Some((YES, NO)))
+        .await
+        .context("Jev didn't answer; try again")?;
     let threshold = data.db.guild(guild_id.get()).await?.threshold();
     let verdict = if hostility::is_hostile(score, threshold) {
-        "🚫 hostile: that would get a timeout"
+        "🚫 not nice: that would get a timeout"
     } else {
         "🤝 fine"
     };

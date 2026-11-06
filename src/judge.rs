@@ -27,7 +27,7 @@ pub async fn judge(
     let gcfg = data.db.guild(guild_id.get()).await?;
     let threshold = gcfg.threshold();
     let n_images = images.len();
-    let state = ai::utterance_state(&u.said, u.in_reply_to.as_deref(), &images);
+    let state = ai::state_for(&u, &images);
     let started = Instant::now();
     let question = hostility::question(u.source);
     let score = ai::ask_noul(data, state, images, question, Some((YES, NO))).await;
@@ -58,6 +58,8 @@ pub async fn judge(
         "threshold": threshold,
         "jev_ms": jev_ms,
         "images": n_images,
+        "context_lines": u.call.as_ref().map(|c| c.recent.len()),
+        "in_call": u.call.as_ref().map(|c| c.in_call.len()),
     });
     stats::record(data, guild_id, log(kind::JUDGED, judged)).await;
     if !hostile {
@@ -168,6 +170,7 @@ mod tests {
             said: "x".into(),
             message: message.map(MessageId::new),
             in_reply_to: None,
+            call: None,
         }
     }
 

@@ -33,7 +33,10 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
   and timed out.
 - **Utterance**: something a participant said, in chat (a message or an edit) or out loud in the
   monitored voice channel (a transcribed speech segment).
-- **Hostile**: Jev scored the utterance at or above the guild's threshold.
+- **Hostile** (in the code; "not nice" to users): Jev scored the utterance at or above the guild's
+  threshold for being not nice to someone.
+- **Call**: the voice moment an utterance was said in: the speaker, who's in the channel, and the
+  last few lines said (the **conversation**).
 - **Native timeout**: Discord's own timeout. **Forced timeout**: the bot's own enforcement for
   members Discord won't let it time out (the owner, admins, members above the bot's role).
   Every timeout is also enforced by the bot (messages deleted, reactions removed, server-muted in

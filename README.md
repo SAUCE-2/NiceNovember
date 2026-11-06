@@ -2,8 +2,9 @@
 
 A Discord bot that keeps November nice.
 
-Members with the participant role who say something hostile, in chat or out loud in voice, are
-timed out for 10 seconds and quoted in the announce channel. Nobody's exempt: members Discord won't
+The bot sits in your voice channel and listens. When a member with the participant role says
+something not nice to someone else in the call, they're timed out for 10 seconds and what they said
+is quoted in the announce channel. Chat messages are judged the same way. Nobody's exempt: members Discord won't
 let a bot time out (the owner, admins, anyone above the bot's role) get a forced timeout instead.
 Everything that happens is logged, so you can build stats from it at the end of the month.
 
@@ -14,6 +15,9 @@ Everything that happens is logged, so you can build stats from it at the end of 
   Swearing at a game is fine. Swearing at a person isn't.
 - **Always listening in voice.** The bot sits in one voice channel all the time and transcribes
   each thing a participant says locally with [Whisper](https://github.com/ggerganov/whisper.cpp).
+- **Judged in context.** Each line is judged with who said it, who's in the call, and the last few
+  lines of the conversation (up to 8, from the last 45 seconds), so "shut up" answering a joke
+  reads differently from "shut up" aimed at someone.
 - **Public call-outs.** Each hostile message or sentence is posted to the announce channel as a
   quote, with who said it and where.
 - **Timeouts for everyone.** Native Discord timeouts where possible, forced ones otherwise. Both
@@ -27,8 +31,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Step | Chat | Voice |
 |---|---|---|
 | Who | Participants only (the participant role) | Participants in the monitored channel |
-| What's judged | Every new message, and edits that change the text | Each thing they say: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
-| Hostile when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
+| What's judged | Every new message (with the message it replies to), and edits that change the text | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
+| Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
 | Then | 10s timeout, quote in the announce channel, details in the log channel | Same, and server-muted until it ends |
 
 **Native or forced?** Discord won't let a bot time out the server owner, anyone with Administrator,
@@ -44,7 +48,8 @@ everyone else in the channel is dropped without being transcribed.
 
 - **Sent to [Jev](https://typesafe.ai):** participants' message text, the text of the message they
   replied to, attached images and embed previews (GIFs, link thumbnails), edits, and transcripts of
-  what they said in VC. Audio never leaves your server.
+  what they said in VC, with the display names of everyone in the call and the last few lines
+  participants said. Audio never leaves your server.
 - **Posted publicly:** each hostile message or transcript, quoted in the announce channel.
 - **Stored in the bot's database:** the activity log (see below), which includes message content
   and transcripts from the whole server. Treat the database and exports as private.
@@ -118,6 +123,19 @@ The data lives in the `nicenovember-data` Podman volume, so it survives updates.
 If the pull fails with `unauthorized` or `denied`, the image on GHCR is private. Make it public in
 GitHub under the repo's **Packages → nicenovember → Package settings → Change visibility**.
 
+### Next to SpiritBot
+
+NiceNovember runs as its own container and doesn't touch SpiritBot's. Its container, volume and
+timer are all called `nicenovember`, while SpiritBot keeps its compose setup and
+`spiritbot-update.timer`. Two things to know:
+
+- **It needs its own Discord bot.** Create a second application (step 1 above) and use its token.
+  Two processes on one token would fight over the same gateway session and slash commands.
+- **The Jev key can be the same one** SpiritBot uses.
+
+Both can sit in voice at the same time. SpiritBot only listens for 10 seconds when someone joins,
+while NiceNovember listens all the time, so expect it to use more CPU (one Whisper run per thing said).
+
 ### Or run it with Docker
 
 ```bash
@@ -171,7 +189,7 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `typing`, `command`, `thread_create` | Who typed where, which slash command was used, new threads |
 | `member_seen` / `member_join` / `member_leave` / `member_update` | Names, nick and roles (snapshot at startup, then changes) |
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
-| `judged` | A Jev verdict: `source` (message/edit/voice), `said`, `score`, `hostile`, `threshold`, `jev_ms`, `images` |
+| `judged` | A Jev verdict: `source` (message/edit/voice), `said`, `score`, `hostile`, `threshold`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
 | `hostile` | Something hostile: what was `said`, `score`, timeout `method` (native/forced), `muted`, `announced` |
 | `timed_out` / `timeout_released` | Each timeout: `method`, `secs`, `until`, why a native one was refused; and when it was lifted |

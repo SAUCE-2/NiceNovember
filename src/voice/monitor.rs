@@ -16,9 +16,10 @@ use serde_json::json;
 use songbird::events::{CoreEvent, Event, EventContext, EventHandler};
 use tokio::sync::mpsc;
 
+use super::conversation::Conversation;
 use super::segmenter::{Limits, Segmenter};
 use crate::app::Data;
-use crate::hostility::{self, Source, Utterance};
+use crate::hostility::{self, Call, Line, Source, Utterance};
 use crate::stats::{self, Log, kind};
 
 /// One finished speech segment, waiting to be transcribed.
@@ -36,6 +37,8 @@ struct Listening {
     segmenter: Segmenter<UserId>,
     /// The last join error logged, so the watchdog doesn't log the same one every 30 s.
     last_error: Option<String>,
+    /// What was said lately, as context for judging the next line.
+    conversation: Conversation,
 }
 
 impl Default for Listening {
@@ -45,6 +48,7 @@ impl Default for Listening {
             ssrc_to_user: HashMap::new(),
             segmenter: Segmenter::new(Limits::default()),
             last_error: None,
+            conversation: Conversation::default(),
         }
     }
 }
@@ -287,6 +291,18 @@ async fn on_heard(ctx: &serenity::Context, data: &Data, h: Heard) -> Result<()> 
     if text.is_empty() {
         return Ok(());
     }
+    let (speaker, in_call) = names_in_call(ctx, h.guild_id, h.channel, h.user);
+    let line = Line {
+        speaker: speaker.clone(),
+        said: text.clone(),
+    };
+    let recent = data
+        .monitor
+        .guild(h.guild_id)
+        .lock()
+        .unwrap()
+        .conversation
+        .next(Instant::now(), line);
     let u = Utterance {
         user: h.user,
         channel: h.channel,
@@ -294,8 +310,38 @@ async fn on_heard(ctx: &serenity::Context, data: &Data, h: Heard) -> Result<()> 
         said: text,
         message: None,
         in_reply_to: None,
+        call: Some(Call {
+            speaker,
+            in_call,
+            recent,
+        }),
     };
     crate::judge::judge(ctx, data, h.guild_id, u, vec![]).await
+}
+
+/// The speaker's display name, and everyone's in `channel` (bots excluded), from the cache.
+fn names_in_call(
+    ctx: &serenity::Context,
+    guild_id: GuildId,
+    channel: ChannelId,
+    speaker: UserId,
+) -> (String, Vec<String>) {
+    let Some(g) = ctx.cache.guild(guild_id) else {
+        return (speaker.to_string(), vec![]);
+    };
+    let name = |u: &UserId| {
+        g.members
+            .get(u)
+            .map_or_else(|| u.to_string(), |m| m.display_name().to_owned())
+    };
+    let in_call = g
+        .voice_states
+        .values()
+        .filter(|v| v.channel_id == Some(channel))
+        .filter(|v| !g.members.get(&v.user_id).is_some_and(|m| m.user.bot))
+        .map(|v| name(&v.user_id))
+        .collect();
+    (name(&speaker), in_call)
 }
 
 #[derive(Clone)]

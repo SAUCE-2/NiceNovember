@@ -69,6 +69,7 @@ async fn on_message(ctx: &serenity::Context, data: &Data, msg: &Message) -> Resu
         said: msg.content.clone(),
         message: Some(msg.id),
         in_reply_to: msg.referenced_message.as_ref().map(|r| r.content.clone()),
+        call: None,
     };
     judge::judge(ctx, data, guild_id, u, images).await
 }
@@ -103,6 +104,7 @@ async fn on_edit(
         said: text.to_owned(),
         message: Some(e.id),
         in_reply_to: None,
+        call: None,
     };
     judge::judge(ctx, data, guild_id, u, vec![]).await
 }
