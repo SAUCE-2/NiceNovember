@@ -37,9 +37,8 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
   threshold for being not nice to someone.
 - **Call**: the voice moment an utterance was said in: the speaker, who's in the channel, and the
   last few lines said (the **conversation**).
-- **Native timeout**: Discord's own timeout. **Forced timeout**: the bot's own enforcement for
-  members Discord won't let it time out (the owner, admins, members above the bot's role).
-  Every timeout is also enforced by the bot (messages deleted, reactions removed, server-muted in
-  VC), so both kinds behave the same.
+- **Timeout**: the bot's own enforcement, never Discord's native timeout: until it ends, the
+ participant's messages are deleted, their reactions removed, and they're server-muted and
+ deafened in VC. It works the same on everyone, the owner and admins included.
 - **Monitored channel**: the one voice channel the bot always sits in and listens to.
 - **Activity log**: the raw record of everything that happens, for building stats afterwards.

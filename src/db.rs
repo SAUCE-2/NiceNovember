@@ -1,6 +1,5 @@
 //! SQLite persistence. Snowflakes are stored as i64; times as fixed-width RFC3339 UTC text.
 
-use std::fmt;
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -63,29 +62,12 @@ pub enum Clear {
     Threshold,
 }
 
-/// How a timeout is applied. Discord refuses native timeouts on the owner, admins and anyone at
-/// or above the bot's top role; those get a forced one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Method {
-    Native,
-    Forced,
-}
-
-impl fmt::Display for Method {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Method::Native => "native",
-            Method::Forced => "forced",
-        })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, sqlx::FromRow)]
 pub struct TimeoutRow {
     pub guild_id: i64,
     pub user_id: i64,
     pub until: String,
-    pub method: String,
+    /// The bot server-muted and deafened them, and must undo both.
     pub voice_muted: bool,
 }
 
@@ -260,17 +242,14 @@ impl Db {
         guild_id: u64,
         user_id: u64,
         until: DateTime<Utc>,
-        method: Method,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO timeouts (guild_id, user_id, until, method) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (guild_id, user_id) DO UPDATE SET
-               until = max(until, excluded.until), method = excluded.method",
+            "INSERT INTO timeouts (guild_id, user_id, until) VALUES (?1, ?2, ?3)
+             ON CONFLICT (guild_id, user_id) DO UPDATE SET until = max(until, excluded.until)",
         )
         .bind(guild_id as i64)
         .bind(user_id as i64)
         .bind(fmt_time(until))
-        .bind(method.to_string())
         .execute(&self.0)
         .await?;
         Ok(())
@@ -451,21 +430,18 @@ mod tests {
         let soon = Utc::now() + Duration::seconds(10);
         assert!(db.timed_out(1, 7).await.unwrap().is_none());
 
-        db.start_timeout(1, 7, soon, Method::Forced).await.unwrap();
+        db.start_timeout(1, 7, soon).await.unwrap();
         assert!(db.timed_out(1, 7).await.unwrap().is_some());
         assert_eq!(db.active_timeouts(1).await.unwrap(), 1);
         assert_eq!(db.active_timeouts(2).await.unwrap(), 0);
 
-        // A shorter one doesn't cut it short, but the method follows the latest.
-        db.start_timeout(1, 7, Utc::now(), Method::Native)
-            .await
-            .unwrap();
+        // A shorter one doesn't cut it short.
+        db.start_timeout(1, 7, Utc::now()).await.unwrap();
         let row = db.timeout(1, 7).await.unwrap().unwrap();
         assert_eq!(
             row.until(),
             Some(soon).map(|t| parse_time(&fmt_time(t)).unwrap())
         );
-        assert_eq!(row.method, "native");
         assert!(!row.voice_muted);
 
         db.set_voice_muted(1, 7, true).await.unwrap();
