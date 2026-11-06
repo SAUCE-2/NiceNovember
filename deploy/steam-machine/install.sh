@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Install NiceNovember on a Steam Machine (SteamOS), or any Linux box with rootless Podman and
-# systemd. The bot runs from its GHCR image and a systemd timer keeps it updated (Watchtower
-# can't recreate containers under Podman: "cannot set memory swappiness with cgroupv2").
+# Install NiceNovember on a Steam Machine (SteamOS), or any Linux box with rootless Podman 4.4+ and
+# systemd. The bot runs from its GHCR image as a Quadlet service, and podman-auto-update keeps it
+# on the latest image (Watchtower can't recreate containers under Podman: "cannot set memory
+# swappiness with cgroupv2").
 #
 #   curl -fsSL https://raw.githubusercontent.com/SAUCE-2/NiceNovember/main/deploy/steam-machine/install.sh | bash
 #
@@ -12,6 +13,7 @@ set -euo pipefail
 IMAGE=${NICENOVEMBER_IMAGE:-ghcr.io/sauce-2/nicenovember:latest}
 DIR=${NICENOVEMBER_DIR:-$HOME/nicenovember}
 UNITS=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+QUADLETS=${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd
 RAW=${NICENOVEMBER_RAW:-https://raw.githubusercontent.com/SAUCE-2/NiceNovember/main}
 # The checkout this script is in, or empty when it's piped in from curl.
 HERE=
@@ -31,7 +33,7 @@ fetch() {
 }
 
 command -v podman >/dev/null || die "podman isn't installed (SteamOS 3.5+ ships it)"
-mkdir -p "$DIR" "$UNITS"
+mkdir -p "$DIR" "$UNITS/podman-auto-update.timer.d" "$QUADLETS"
 
 if [ ! -f "$DIR/.env" ]; then
   fetch ../../.env.example "$DIR/.env" .env.example
@@ -42,39 +44,42 @@ fi
 grep -q '^DISCORD_TOKEN=..*' "$DIR/.env" || die "DISCORD_TOKEN is empty in $DIR/.env"
 grep -q '^JEV_API_KEY=..*' "$DIR/.env" || echo "warning: JEV_API_KEY is empty, so nothing will be judged"
 
-fetch update.sh "$DIR/update.sh" deploy/steam-machine/update.sh
-chmod +x "$DIR/update.sh"
+# Older installs ran the container from a oneshot timer service, which killed the container's
+# fuse-overlayfs on exit and so crashed the bot with SIGBUS. The Quadlet service below replaces it.
+systemctl --user disable --now nicenovember-update.timer >/dev/null 2>&1 || true
+rm -f "$UNITS/nicenovember-update.service" "$UNITS/nicenovember-update.timer" "$DIR/update.sh"
 
-cat > "$UNITS/nicenovember-update.service" <<UNIT
+cat > "$QUADLETS/nicenovember.container" <<UNIT
 [Unit]
-Description=Update and (re)start the NiceNovember Discord bot
-Wants=network-online.target
-After=network-online.target
+Description=NiceNovember Discord bot
+
+[Container]
+Image=$IMAGE
+ContainerName=nicenovember
+EnvironmentFile=$DIR/.env
+Volume=nicenovember-data:/data
+AutoUpdate=registry
 
 [Service]
-Type=oneshot
-Environment=NICENOVEMBER_IMAGE=$IMAGE
-Environment=NICENOVEMBER_DIR=$DIR
-ExecStart=$DIR/update.sh
-UNIT
-
-cat > "$UNITS/nicenovember-update.timer" <<UNIT
-[Unit]
-Description=Check for NiceNovember updates every 2 minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=2min
+Restart=always
+# The first start pulls the image.
+TimeoutStartSec=900
 
 [Install]
-WantedBy=timers.target
+WantedBy=default.target
+UNIT
+
+cat > "$UNITS/podman-auto-update.timer.d/nicenovember.conf" <<UNIT
+# Check for a new image every 2 minutes instead of daily.
+[Timer]
+OnCalendar=
+OnCalendar=*:0/2
+RandomizedDelaySec=0
 UNIT
 
 systemctl --user daemon-reload
-# Starts containers with --restart=always again after a reboot.
-systemctl --user enable --now podman-restart.service >/dev/null 2>&1 ||
-  echo "warning: podman-restart.service isn't available; the timer still starts the bot after boot"
-systemctl --user enable --now nicenovember-update.timer
+systemctl --user enable --now podman-auto-update.timer
+systemctl --user restart nicenovember.service
 
 # Keep user services running when nobody's logged in (e.g. in Game Mode).
 if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]; then
@@ -83,5 +88,4 @@ if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]; the
     echo "warning: couldn't enable linger; run 'sudo loginctl enable-linger $USER' yourself"
 fi
 
-NICENOVEMBER_IMAGE=$IMAGE NICENOVEMBER_DIR=$DIR "$DIR/update.sh"
 echo "Done. Logs: podman logs -f nicenovember"

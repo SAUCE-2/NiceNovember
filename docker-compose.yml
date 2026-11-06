@@ -1,6 +1,6 @@
 # Production setup with Docker. Updates are by hand: `docker compose pull && docker compose up -d`.
 # On the Steam Machine (rootless Podman) use deploy/steam-machine/install.sh instead: it runs the
-# same image under Podman and keeps it updated with a systemd timer (Watchtower doesn't work there).
+# same image as a Podman Quadlet service and keeps it updated (Watchtower doesn't work there).
 services:
   nicenovember:
     image: ghcr.io/sauce-2/nicenovember:latest
