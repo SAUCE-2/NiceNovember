@@ -151,27 +151,26 @@ impl Period {
         NaiveDate::from_ymd_opt(year, m, 1).map(Period::Month)
     }
 
-    /// `LIKE` pattern matching this period's `day` values.
-    fn pattern(&self) -> String {
+    /// `all` for all time, otherwise the month written with the chrono format `month`.
+    fn render(&self, all: &str, month: &str) -> String {
         match self {
-            Period::All => "%".into(),
-            Period::Month(d) => d.format("%Y-%m-%%").to_string(),
+            Period::All => all.into(),
+            Period::Month(d) => d.format(month).to_string(),
         }
     }
 
+    /// `LIKE` pattern matching this period's `day` values.
+    fn pattern(&self) -> String {
+        self.render("%", "%Y-%m-%%")
+    }
+
     pub fn label(&self) -> String {
-        match self {
-            Period::All => "all time".into(),
-            Period::Month(d) => d.format("%B %Y").to_string(),
-        }
+        self.render("all time", "%B %Y")
     }
 
     /// For file names.
     pub fn slug(&self) -> String {
-        match self {
-            Period::All => "all".into(),
-            Period::Month(d) => d.format("%Y-%m").to_string(),
-        }
+        self.render("all", "%Y-%m")
     }
 }
 
@@ -384,7 +383,18 @@ mod tests {
         assert_eq!(Period::parse("all", today), Some(Period::All));
         assert_eq!(Period::parse("ju", today), None);
         assert_eq!(Period::parse("nope", today), None);
-        assert_eq!(Period::Month(d("2026-12-01")).pattern(), "2026-12-%");
+        let dec = Period::Month(d("2026-12-01"));
+        assert_eq!(dec.pattern(), "2026-12-%");
+        assert_eq!(dec.label(), "December 2026");
+        assert_eq!(dec.slug(), "2026-12");
+        assert_eq!(
+            (
+                Period::All.pattern(),
+                Period::All.label(),
+                Period::All.slug()
+            ),
+            ("%".into(), "all time".into(), "all".into())
+        );
     }
 
     #[tokio::test]

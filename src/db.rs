@@ -42,6 +42,24 @@ pub enum GuildField {
     VoiceChannel,
 }
 
+/// What `/nice setup` changes; `None` leaves a setting as it is.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SetupChanges {
+    pub participant_role: Option<u64>,
+    pub announce_channel: Option<u64>,
+    pub log_channel: Option<u64>,
+    pub voice_channel: Option<u64>,
+    pub threshold: Option<f32>,
+}
+
+/// The optional settings `/nice unset` can clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clear {
+    LogChannel,
+    VoiceChannel,
+    Threshold,
+}
+
 /// How a timeout is applied. Discord refuses native timeouts on the owner, admins and anyone at
 /// or above the bot's top role; those get a forced one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +191,39 @@ impl Db {
         .execute(&self.0)
         .await?;
         Ok(())
+    }
+
+    pub async fn apply_setup(&self, guild_id: u64, c: &SetupChanges) -> Result<()> {
+        let fields = [
+            (GuildField::ParticipantRole, c.participant_role),
+            (GuildField::AnnounceChannel, c.announce_channel),
+            (GuildField::LogChannel, c.log_channel),
+            (GuildField::VoiceChannel, c.voice_channel),
+        ];
+        for (field, id) in fields {
+            if let Some(id) = id {
+                self.set_guild_field(guild_id, field, Some(id as i64))
+                    .await?;
+            }
+        }
+        if let Some(t) = c.threshold {
+            self.set_threshold(guild_id, Some(t)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn clear(&self, guild_id: u64, what: Clear) -> Result<()> {
+        match what {
+            Clear::LogChannel => {
+                self.set_guild_field(guild_id, GuildField::LogChannel, None)
+                    .await
+            }
+            Clear::VoiceChannel => {
+                self.set_guild_field(guild_id, GuildField::VoiceChannel, None)
+                    .await
+            }
+            Clear::Threshold => self.set_threshold(guild_id, None).await,
+        }
     }
 
     pub async fn set_setup_hash(&self, guild_id: u64, hash: Option<&str>) -> Result<()> {
@@ -332,6 +383,44 @@ mod tests {
         assert!(db.voice_channels().await.unwrap().is_empty());
         db.set_threshold(1, None).await.unwrap();
         assert_eq!(db.guild(1).await.unwrap().threshold(), DEFAULT_THRESHOLD);
+    }
+
+    #[tokio::test]
+    async fn setup_changes_only_what_was_given_and_clears() {
+        let db = db().await;
+        let all = SetupChanges {
+            participant_role: Some(1),
+            announce_channel: Some(2),
+            log_channel: Some(3),
+            voice_channel: Some(4),
+            threshold: Some(0.4),
+        };
+        db.apply_setup(1, &all).await.unwrap();
+        let only_voice = SetupChanges {
+            voice_channel: Some(5),
+            ..Default::default()
+        };
+        db.apply_setup(1, &only_voice).await.unwrap();
+        let g = db.guild(1).await.unwrap();
+        assert_eq!(
+            (
+                g.participant_role_id,
+                g.announce_channel_id,
+                g.log_channel_id,
+                g.voice_channel_id,
+                g.threshold()
+            ),
+            (Some(1), Some(2), Some(3), Some(5), 0.4)
+        );
+
+        db.clear(1, Clear::LogChannel).await.unwrap();
+        assert_eq!(db.guild(1).await.unwrap().log_channel_id, None);
+        db.clear(1, Clear::VoiceChannel).await.unwrap();
+        assert_eq!(db.guild(1).await.unwrap().voice_channel_id, None);
+        db.clear(1, Clear::Threshold).await.unwrap();
+        let g = db.guild(1).await.unwrap();
+        assert_eq!(g.threshold(), DEFAULT_THRESHOLD);
+        assert_eq!(g.participant_role_id, Some(1), "the rest stays");
     }
 
     #[tokio::test]

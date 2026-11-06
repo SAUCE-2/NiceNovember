@@ -233,6 +233,30 @@ async fn reaction(
     log_user(ctx, data, g, user, log).await;
 }
 
+/// What a voice state update was: `join`, `leave`, `move`, or `update` (mute, deafen, stream...).
+pub fn voice_change(old: Option<ChannelId>, new: Option<ChannelId>) -> &'static str {
+    match (old, new) {
+        (None, Some(_)) => "join",
+        (Some(_), None) => "leave",
+        (Some(a), Some(b)) if a != b => "move",
+        _ => "update",
+    }
+}
+
+/// A voice state without the bulky member object (it's the same person every time).
+fn strip(v: &VoiceState) -> serde_json::Value {
+    json!({
+        "channel_id": v.channel_id,
+        "self_mute": v.self_mute,
+        "self_deaf": v.self_deaf,
+        "self_stream": v.self_stream,
+        "self_video": v.self_video,
+        "mute": v.mute,
+        "deaf": v.deaf,
+        "suppress": v.suppress,
+    })
+}
+
 async fn voice(ctx: &serenity::Context, data: &Data, old: Option<&VoiceState>, new: &VoiceState) {
     let Some(g) = new.guild_id else { return };
     if new.member.as_ref().is_some_and(|m| m.user.bot) {
@@ -240,25 +264,7 @@ async fn voice(ctx: &serenity::Context, data: &Data, old: Option<&VoiceState>, n
     }
     let user = new.user_id;
     let old_ch = old.and_then(|o| o.channel_id);
-    let change = match (old_ch, new.channel_id) {
-        (None, Some(_)) => "join",
-        (Some(_), None) => "leave",
-        (Some(a), Some(b)) if a != b => "move",
-        _ => "update",
-    };
-    // Drop the bulky member object: it's the same person every time.
-    let strip = |v: &VoiceState| {
-        json!({
-            "channel_id": v.channel_id,
-            "self_mute": v.self_mute,
-            "self_deaf": v.self_deaf,
-            "self_stream": v.self_stream,
-            "self_video": v.self_video,
-            "mute": v.mute,
-            "deaf": v.deaf,
-            "suppress": v.suppress,
-        })
-    };
+    let change = voice_change(old_ch, new.channel_id);
     let mut log = Log::new(
         "voice",
         json!({ "change": change, "old": old.map(strip), "new": strip(new) }),
@@ -287,6 +293,17 @@ async fn voice(ctx: &serenity::Context, data: &Data, old: Option<&VoiceState>, n
 #[cfg(test)]
 mod tests {
     use poise::serenity_prelude::{Message, MessageId};
+
+    #[test]
+    fn voice_changes() {
+        use super::{ChannelId, voice_change};
+        let (a, b) = (Some(ChannelId::new(1)), Some(ChannelId::new(2)));
+        assert_eq!(voice_change(None, a), "join");
+        assert_eq!(voice_change(a, None), "leave");
+        assert_eq!(voice_change(a, b), "move");
+        assert_eq!(voice_change(a, a), "update");
+        assert_eq!(voice_change(None, None), "update");
+    }
 
     #[test]
     fn message_ids_serialize_as_strings() {

@@ -8,7 +8,7 @@ use poise::serenity_prelude::{
 use serde_json::Value;
 
 use crate::app::Ctx;
-use crate::db::{DEFAULT_THRESHOLD, GuildField};
+use crate::db::{Clear, DEFAULT_THRESHOLD, SetupChanges};
 use crate::hostility::{self, NO, Source, YES};
 use crate::stats::kind;
 use crate::voice::monitor;
@@ -67,31 +67,18 @@ async fn setup(
     let data = ctx.data();
     let db = &data.db;
     ctx.defer_ephemeral().await.ok();
-    if let Some(t) = threshold {
-        let t = parse_threshold(t).context("the threshold has to be between 0.05 and 1")?;
-        db.set_threshold(guild_id.get(), Some(t)).await?;
-    }
-    let fields = [
-        (GuildField::ParticipantRole, role.map(|r| r.id.get())),
-        (
-            GuildField::AnnounceChannel,
-            announce_channel.map(|c| c.id().get()),
-        ),
-        (GuildField::LogChannel, log_channel.map(|c| c.id().get())),
-        (
-            GuildField::VoiceChannel,
-            voice_channel.as_ref().map(|c| c.id().get()),
-        ),
-    ];
-    for (field, id) in fields {
-        if let Some(id) = id {
-            db.set_guild_field(guild_id.get(), field, Some(id as i64))
-                .await?;
-        }
-    }
-    if voice_channel.is_some() {
-        monitor::ensure(ctx.serenity_context(), data, guild_id).await?;
-    }
+    let threshold = threshold
+        .map(|t| parse_threshold(t).context("the threshold has to be between 0.05 and 1"))
+        .transpose()?;
+    let changes = SetupChanges {
+        participant_role: role.map(|r| r.id.get()),
+        announce_channel: announce_channel.map(|c| c.id().get()),
+        log_channel: log_channel.map(|c| c.id().get()),
+        voice_channel: voice_channel.map(|c| c.id().get()),
+        threshold,
+    };
+    db.apply_setup(guild_id.get(), &changes).await?;
+    monitor::ensure(ctx.serenity_context(), data, guild_id).await?;
     let problems = setup::problems(ctx.serenity_context(), data, guild_id).await?;
     // Keep the "changed since last report" fingerprint in sync with what the admin just saw.
     db.set_setup_hash(guild_id.get(), Some(&problems.join("\n")))
@@ -122,25 +109,16 @@ enum Setting {
 async fn unset(ctx: Ctx<'_>, setting: Setting) -> Result<()> {
     let guild_id = guild(ctx)?;
     let data = ctx.data();
-    match setting {
-        Setting::LogChannel => {
-            data.db
-                .set_guild_field(guild_id.get(), GuildField::LogChannel, None)
-                .await?
-        }
-        Setting::VoiceChannel => {
-            data.db
-                .set_guild_field(guild_id.get(), GuildField::VoiceChannel, None)
-                .await?;
-            monitor::ensure(ctx.serenity_context(), data, guild_id).await?;
-        }
-        Setting::Threshold => data.db.set_threshold(guild_id.get(), None).await?,
-    }
-    let what = match setting {
-        Setting::LogChannel => "log channel: details go to the announce channel now",
-        Setting::VoiceChannel => "voice channel: I've stopped listening",
-        Setting::Threshold => "threshold: back to the default",
+    let (what, clear) = match setting {
+        Setting::LogChannel => (
+            "log channel: details go to the announce channel now",
+            Clear::LogChannel,
+        ),
+        Setting::VoiceChannel => ("voice channel: I've stopped listening", Clear::VoiceChannel),
+        Setting::Threshold => ("threshold: back to the default", Clear::Threshold),
     };
+    data.db.clear(guild_id.get(), clear).await?;
+    monitor::ensure(ctx.serenity_context(), data, guild_id).await?;
     reply(ctx, format!("Cleared the {what}.")).await
 }
 

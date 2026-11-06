@@ -7,6 +7,88 @@ use poise::serenity_prelude::{
 
 use crate::app::Data;
 
+/// Whether a configured thing still exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting<T> {
+    Unset,
+    Deleted,
+    Present(T),
+}
+
+impl<T> Setting<T> {
+    fn of(id: Option<i64>, find: impl FnOnce(i64) -> Option<T>) -> Self {
+        match id {
+            None => Setting::Unset,
+            Some(id) => find(id).map_or(Setting::Deleted, Setting::Present),
+        }
+    }
+}
+
+/// What the checklist looks at, gathered from the cache and the bot's config.
+#[derive(Clone, Copy, Debug)]
+pub struct Facts {
+    pub role: Setting<()>,
+    pub announce: Setting<()>,
+    pub log: Setting<()>,
+    pub voice: Setting<ChannelType>,
+    /// `None` if the bot's own member couldn't be looked up.
+    pub bot_is_admin: Option<bool>,
+    pub jev: bool,
+    pub whisper: bool,
+}
+
+const FIX_ROLE: &str = "`/nice setup role:@Role`";
+const FIX_ANNOUNCE: &str = "`/nice setup announce_channel:#channel`";
+const FIX_VOICE: &str = "`/nice setup voice_channel:🔊channel`";
+
+/// Everything wrong, each with the fix.
+pub fn checklist(f: &Facts) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut add = |s: String| out.push(s);
+    match f.role {
+        Setting::Unset => add(format!(
+            "No participant role, so nobody is judged → {FIX_ROLE}"
+        )),
+        Setting::Deleted => add(format!("The participant role was deleted → {FIX_ROLE}")),
+        Setting::Present(()) => {}
+    }
+    match f.announce {
+        Setting::Unset => add(format!(
+            "No announce channel (hostile quotes go there) → {FIX_ANNOUNCE}"
+        )),
+        Setting::Deleted => add(format!("The announce channel was deleted → {FIX_ANNOUNCE}")),
+        Setting::Present(()) => {}
+    }
+    if f.log == Setting::Deleted {
+        add("The log channel was deleted → `/nice setup log_channel:#channel`".into());
+    }
+    match f.voice {
+        Setting::Unset => add(format!(
+            "No monitored voice channel, so voice isn't judged → {FIX_VOICE}"
+        )),
+        Setting::Deleted => add(format!(
+            "The monitored voice channel was deleted → {FIX_VOICE}"
+        )),
+        Setting::Present(ChannelType::Voice | ChannelType::Stage) => {}
+        Setting::Present(_) => add(format!(
+            "The monitored channel isn't a voice channel → {FIX_VOICE}"
+        )),
+    }
+    if f.bot_is_admin == Some(false) {
+        add("I need **Administrator** → give my role it in Server Settings → Roles".into());
+    }
+    if !f.jev {
+        add("`JEV_API_KEY` isn't set on the bot, so nothing can be judged".into());
+    }
+    if !f.whisper && f.voice != Setting::Unset {
+        add(
+            "The Whisper model isn't loaded (check `WHISPER_MODEL`), so voice can't be transcribed"
+                .into(),
+        );
+    }
+    out
+}
+
 /// Everything wrong with this guild's setup, each with the fix.
 pub async fn problems(
     ctx: &serenity::Context,
@@ -16,69 +98,26 @@ pub async fn problems(
     let gcfg = data.db.guild(guild_id.get()).await?;
     let bot_id = ctx.cache.current_user().id;
     let bot_member = guild_id.member(ctx, bot_id).await.ok();
-    let mut out = Vec::new();
-    {
+    let facts = {
         let Some(g) = ctx.cache.guild(guild_id) else {
             return Ok(vec![
                 "Server isn't cached yet; try again in a moment.".into(),
             ]);
         };
-        match gcfg.participant_role_id.map(|r| RoleId::new(r as u64)) {
-            None => out
-                .push("No participant role, so nobody is judged → `/nice setup role:@Role`".into()),
-            Some(r) if !g.roles.contains_key(&r) => {
-                out.push("The participant role was deleted → `/nice setup role:@Role`".into())
-            }
-            _ => {}
+        let channel = |id: i64| g.channels.get(&ChannelId::new(id as u64)).map(|c| c.kind);
+        Facts {
+            role: Setting::of(gcfg.participant_role_id, |r| {
+                g.roles.contains_key(&RoleId::new(r as u64)).then_some(())
+            }),
+            announce: Setting::of(gcfg.announce_channel_id, |c| channel(c).map(|_| ())),
+            log: Setting::of(gcfg.log_channel_id, |c| channel(c).map(|_| ())),
+            voice: Setting::of(gcfg.voice_channel_id, channel),
+            bot_is_admin: bot_member.map(|m| g.member_permissions(&m).administrator()),
+            jev: data.jev.is_some(),
+            whisper: data.stt.is_some(),
         }
-        let channel = |id: Option<i64>| id.and_then(|c| g.channels.get(&ChannelId::new(c as u64)));
-        if gcfg.announce_channel_id.is_none() {
-            out.push(
-                "No announce channel (hostile quotes go there) → `/nice setup announce_channel:#channel`"
-                    .into(),
-            );
-        } else if channel(gcfg.announce_channel_id).is_none() {
-            out.push(
-                "The announce channel was deleted → `/nice setup announce_channel:#channel`".into(),
-            );
-        }
-        if gcfg.log_channel_id.is_some() && channel(gcfg.log_channel_id).is_none() {
-            out.push("The log channel was deleted → `/nice setup log_channel:#channel`".into());
-        }
-        match (gcfg.voice_channel_id, channel(gcfg.voice_channel_id)) {
-            (None, _) => out.push(
-                "No monitored voice channel, so voice isn't judged → `/nice setup voice_channel:🔊channel`"
-                    .into(),
-            ),
-            (Some(_), None) => out.push(
-                "The monitored voice channel was deleted → `/nice setup voice_channel:🔊channel`"
-                    .into(),
-            ),
-            (Some(_), Some(c)) if !matches!(c.kind, ChannelType::Voice | ChannelType::Stage) => out
-                .push(
-                    "The monitored channel isn't a voice channel → `/nice setup voice_channel:🔊channel`"
-                        .into(),
-                ),
-            _ => {}
-        }
-        if let Some(me) = &bot_member
-            && !g.member_permissions(me).administrator()
-        {
-            out.push(
-                "I need **Administrator** → give my role it in Server Settings → Roles".into(),
-            );
-        }
-    }
-    if data.jev.is_none() {
-        out.push("`JEV_API_KEY` isn't set on the bot, so nothing can be judged".into());
-    }
-    if data.stt.is_none() && gcfg.voice_channel_id.is_some() {
-        out.push(
-            "The Whisper model isn't loaded (check `WHISPER_MODEL`), so voice can't be transcribed"
-                .into(),
-        );
-    }
-    Ok(out)
+    };
+    Ok(checklist(&facts))
 }
 
 pub fn embed(problems: &[String]) -> CreateEmbed {
@@ -171,6 +210,79 @@ async fn send(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg: Crea
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fine() -> Facts {
+        Facts {
+            role: Setting::Present(()),
+            announce: Setting::Present(()),
+            log: Setting::Unset,
+            voice: Setting::Present(ChannelType::Voice),
+            bot_is_admin: Some(true),
+            jev: true,
+            whisper: true,
+        }
+    }
+
+    fn check(f: impl FnOnce(&mut Facts)) -> Vec<String> {
+        let mut facts = fine();
+        f(&mut facts);
+        checklist(&facts)
+    }
+
+    #[test]
+    fn all_set_up_is_empty() {
+        assert!(checklist(&fine()).is_empty());
+        assert!(check(|f| f.log = Setting::Present(())).is_empty());
+        assert!(check(|f| f.voice = Setting::Present(ChannelType::Stage)).is_empty());
+        assert!(
+            check(|f| f.bot_is_admin = None).is_empty(),
+            "unknown isn't a problem"
+        );
+        assert!(
+            check(|f| (f.voice, f.whisper) = (Setting::Unset, false)).len() == 1,
+            "no Whisper only matters with a voice channel"
+        );
+    }
+
+    #[test]
+    fn each_problem_has_its_fix() {
+        let one = |f: fn(&mut Facts)| {
+            let p = check(f);
+            assert_eq!(p.len(), 1, "{p:?}");
+            p[0].clone()
+        };
+        assert!(one(|f| f.role = Setting::Unset).starts_with("No participant role"));
+        assert!(
+            one(|f| f.role = Setting::Deleted).contains("role was deleted → `/nice setup role")
+        );
+        assert!(one(|f| f.announce = Setting::Unset).starts_with("No announce channel"));
+        assert!(
+            one(|f| f.announce = Setting::Deleted).starts_with("The announce channel was deleted")
+        );
+        assert!(one(|f| f.log = Setting::Deleted).starts_with("The log channel was deleted"));
+        assert!(one(|f| f.voice = Setting::Unset).starts_with("No monitored voice channel"));
+        assert!(
+            one(|f| f.voice = Setting::Deleted)
+                .starts_with("The monitored voice channel was deleted")
+        );
+        assert!(
+            one(|f| f.voice = Setting::Present(ChannelType::Text))
+                .contains("isn't a voice channel")
+        );
+        assert!(one(|f| f.bot_is_admin = Some(false)).contains("Administrator"));
+        assert!(one(|f| f.jev = false).contains("JEV_API_KEY"));
+        assert!(one(|f| f.whisper = false).contains("WHISPER_MODEL"));
+    }
+
+    #[test]
+    fn settings_resolve() {
+        assert_eq!(Setting::of(None, |_| Some(1)), Setting::Unset);
+        assert_eq!(Setting::of(Some(5), |_| None::<u8>), Setting::Deleted);
+        assert_eq!(
+            Setting::of(Some(5), |id| Some(id * 2)),
+            Setting::Present(10)
+        );
+    }
 
     #[test]
     fn reports_only_changes() {

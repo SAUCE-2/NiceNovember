@@ -49,6 +49,64 @@ impl Default for Listening {
     }
 }
 
+impl Listening {
+    /// The bot is now in `channel`: start afresh (SSRCs are per voice session).
+    fn joined(&mut self, channel: ChannelId) {
+        *self = Self {
+            channel: Some(channel),
+            ..Self::default()
+        };
+    }
+
+    /// Joining failed. Returns whether this error is new (worth logging).
+    fn join_failed(&mut self, error: &str) -> bool {
+        self.channel = None;
+        self.last_error.replace(error.to_owned()).as_deref() != Some(error)
+    }
+
+    fn speaking(&mut self, ssrc: u32, user: UserId) {
+        self.ssrc_to_user.insert(ssrc, user);
+    }
+
+    /// One 20 ms tick of `(ssrc, decoded audio)`: the speech segments it finished, with who
+    /// said them. Audio from SSRCs not yet tied to a user is ignored.
+    fn tick<'a>(
+        &mut self,
+        speaking: impl Iterator<Item = (u32, Option<&'a [i16]>)>,
+    ) -> Vec<(UserId, Vec<i16>)> {
+        if self.channel.is_none() {
+            return vec![];
+        }
+        let frames: Vec<(UserId, &[i16])> = speaking
+            .filter_map(|(ssrc, pcm)| Some((*self.ssrc_to_user.get(&ssrc)?, pcm?)))
+            .collect();
+        self.segmenter.tick(&frames)
+    }
+}
+
+/// What [`ensure`] has to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Stay,
+    Leave,
+    Join(ChannelId),
+}
+
+/// From the channel the bot should be in, the one Discord says it's in, and the one it's
+/// listening to.
+pub fn plan(
+    want: Option<ChannelId>,
+    current: Option<ChannelId>,
+    listening: Option<ChannelId>,
+) -> Step {
+    match want {
+        None if current.is_none() && listening.is_none() => Step::Stay,
+        None => Step::Leave,
+        Some(w) if current == Some(w) && listening == Some(w) => Step::Stay,
+        Some(w) => Step::Join(w),
+    }
+}
+
 type Shared = Arc<Mutex<Listening>>;
 
 #[derive(Default)]
@@ -129,17 +187,27 @@ pub async fn ensure(ctx: &serenity::Context, data: &Data, guild_id: GuildId) -> 
         None => None,
     };
     let st = data.monitor.guild(guild_id);
-    let Some(want) = want else {
-        if current.is_some() {
+    let listening = st.lock().unwrap().channel;
+    match plan(want, current, listening) {
+        Step::Stay => {}
+        Step::Leave => {
             manager.remove(guild_id).await.ok();
+            st.lock().unwrap().channel = None;
         }
-        st.lock().unwrap().channel = None;
-        return Ok(());
-    };
-    if current == Some(want) && st.lock().unwrap().channel == Some(want) {
-        return Ok(());
+        Step::Join(channel) => join(ctx, data, guild_id, &manager, &st, channel).await,
     }
-    match manager.join(guild_id, want).await {
+    Ok(())
+}
+
+async fn join(
+    ctx: &serenity::Context,
+    data: &Data,
+    guild_id: GuildId,
+    manager: &songbird::Songbird,
+    st: &Shared,
+    channel: ChannelId,
+) {
+    let log = match manager.join(guild_id, channel).await {
         Ok(call) => {
             let mut call = call.lock().await;
             call.remove_all_global_events();
@@ -151,32 +219,20 @@ pub async fn ensure(ctx: &serenity::Context, data: &Data, guild_id: GuildId) -> 
             call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), rx.clone());
             call.add_global_event(CoreEvent::VoiceTick.into(), rx);
             call.mute(true).await.ok(); // it only listens
-            {
-                let mut s = st.lock().unwrap();
-                s.channel = Some(want);
-                s.ssrc_to_user.clear(); // SSRCs are per voice session
-                s.segmenter = Segmenter::new(Limits::default());
-                s.last_error = None;
-            }
-            let log = Log::new(kind::MONITOR_JOINED, json!({})).channel(want);
-            stats::record(data, guild_id, log).await;
-            tracing::info!(%guild_id, channel = %want, "monitoring voice");
+            st.lock().unwrap().joined(channel);
+            tracing::info!(%guild_id, %channel, "monitoring voice");
+            Log::new(kind::MONITOR_JOINED, json!({}))
         }
         Err(e) => {
             let error = e.to_string();
-            let repeat = {
-                let mut s = st.lock().unwrap();
-                s.channel = None;
-                s.last_error.replace(error.clone()).as_deref() == Some(error.as_str())
-            };
-            if !repeat {
-                tracing::warn!(%guild_id, channel = %want, "voice join failed: {error}");
-                let log = Log::new(kind::MONITOR_FAILED, json!({ "error": error })).channel(want);
-                stats::record(data, guild_id, log).await;
+            if !st.lock().unwrap().join_failed(&error) {
+                return; // the watchdog retries every 30 s: log each error once
             }
+            tracing::warn!(%guild_id, %channel, "voice join failed: {error}");
+            Log::new(kind::MONITOR_FAILED, json!({ "error": error }))
         }
-    }
-    Ok(())
+    };
+    stats::record(data, guild_id, log.channel(channel)).await;
 }
 
 /// Every server with a monitored channel set.
@@ -251,36 +307,102 @@ struct Receiver {
 #[async_trait]
 impl EventHandler for Receiver {
     async fn act(&self, ev: &EventContext<'_>) -> Option<Event> {
-        let mut guard = self.st.lock().unwrap();
-        let s = &mut *guard; // borrow the map and the segmenter separately
+        let mut s = self.st.lock().unwrap();
         match ev {
             EventContext::SpeakingStateUpdate(sp) => {
                 if let Some(u) = sp.user_id {
-                    s.ssrc_to_user.insert(sp.ssrc, UserId::new(u.0));
+                    s.speaking(sp.ssrc, UserId::new(u.0));
                 }
             }
             EventContext::VoiceTick(tick) => {
                 let channel = s.channel?;
-                let frames: Vec<(UserId, &[i16])> = tick
+                let speaking = tick
                     .speaking
                     .iter()
-                    .filter_map(|(ssrc, d)| {
-                        Some((*s.ssrc_to_user.get(ssrc)?, d.decoded_voice.as_deref()?))
-                    })
-                    .collect();
-                for (user, pcm) in s.segmenter.tick(&frames) {
-                    self.tx
-                        .send(Heard {
-                            guild_id: self.guild_id,
-                            channel,
-                            user,
-                            pcm,
-                        })
-                        .ok();
+                    .map(|(ssrc, d)| (*ssrc, d.decoded_voice.as_deref()));
+                for (user, pcm) in s.tick(speaking) {
+                    let heard = Heard {
+                        guild_id: self.guild_id,
+                        channel,
+                        user,
+                        pcm,
+                    };
+                    self.tx.send(heard).ok();
                 }
             }
             _ => {}
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ch(n: u64) -> Option<ChannelId> {
+        Some(ChannelId::new(n))
+    }
+
+    #[test]
+    fn plans() {
+        assert_eq!(plan(None, None, None), Step::Stay);
+        assert_eq!(plan(None, ch(1), None), Step::Leave);
+        assert_eq!(plan(None, None, ch(1)), Step::Leave);
+        assert_eq!(plan(ch(1), ch(1), ch(1)), Step::Stay);
+        assert_eq!(plan(ch(1), None, None), Step::Join(ChannelId::new(1)));
+        assert_eq!(
+            plan(ch(1), ch(2), ch(2)),
+            Step::Join(ChannelId::new(1)),
+            "moved away"
+        );
+        assert_eq!(
+            plan(ch(1), ch(1), None),
+            Step::Join(ChannelId::new(1)),
+            "not listening"
+        );
+        assert_eq!(
+            plan(ch(1), None, ch(1)),
+            Step::Join(ChannelId::new(1)),
+            "kicked"
+        );
+    }
+
+    #[test]
+    fn join_errors_are_new_once() {
+        let mut l = Listening::default();
+        l.joined(ChannelId::new(1));
+        assert!(l.join_failed("nope"));
+        assert_eq!(l.channel, None);
+        assert!(!l.join_failed("nope"), "same error again");
+        assert!(l.join_failed("other"));
+        l.joined(ChannelId::new(1));
+        assert!(l.join_failed("other"), "joining forgets the last error");
+    }
+
+    #[test]
+    fn ticks_map_ssrcs_to_speakers() {
+        let loud = [1000i16; 320];
+        let mut l = Listening::default();
+        let speak = |l: &mut Listening, ssrc: u32| {
+            let mut out = vec![];
+            for _ in 0..20 {
+                out.extend(l.tick([(ssrc, Some(&loud[..])), (99, None)].into_iter()));
+            }
+            for _ in 0..60 {
+                out.extend(l.tick(std::iter::empty()));
+            }
+            out
+        };
+        l.speaking(5, UserId::new(7));
+        assert!(speak(&mut l, 5).is_empty(), "not in a channel yet");
+        l.joined(ChannelId::new(1));
+        assert!(speak(&mut l, 5).is_empty(), "joining forgets SSRCs");
+        l.speaking(5, UserId::new(7));
+        assert!(speak(&mut l, 6).is_empty(), "unknown SSRC");
+        let heard = speak(&mut l, 5);
+        assert_eq!(heard.len(), 1);
+        assert_eq!(heard[0].0, UserId::new(7));
+        assert_eq!(heard[0].1.len(), 20 * 320);
     }
 }

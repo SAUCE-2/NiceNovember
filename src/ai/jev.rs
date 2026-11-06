@@ -138,45 +138,56 @@ impl Jev {
     ) -> Result<Answers> {
         let body = request_body(state, questions, &images);
         let mut delay = Duration::from_millis(500);
-        for attempt in 0..4 {
-            let mut req = self.http.post(ENDPOINT).bearer_auth(&self.key);
-            req = if images.is_empty() {
-                req.json(&body)
-            } else {
-                let mut form = Form::new().part(
-                    "request",
-                    Part::text(body.to_string()).mime_str("application/json")?,
-                );
-                for (i, img) in images.iter().enumerate() {
-                    form = form.part(
-                        part_name(i),
-                        Part::bytes(img.jpeg.clone())
-                            .file_name(format!("{}.jpg", part_name(i)))
-                            .mime_str("image/jpeg")?,
-                    );
-                }
-                req.header("TypeSafe-Danger-Zone-Images", "true")
-                    .multipart(form)
-            };
-            let resp = req.send().await.context("jev request failed")?;
+        for attempt in 0.. {
+            let resp = self.request(&body, &images)?.send().await;
+            let resp = resp.context("jev request failed")?;
             let status = resp.status();
             if status.is_success() {
                 return resp.json().await.context("bad jev response");
             }
             let text = resp.text().await.unwrap_or_default();
-            // 429 rate limited / 529 overloaded: back off and retry.
-            if (status.as_u16() == 429 || status.as_u16() == 529) && attempt < 3 {
-                tokio::time::sleep(delay).await;
-                delay *= 2;
-                continue;
+            if !retryable(status.as_u16(), attempt) {
+                bail!(
+                    "jev returned {status}: {}",
+                    text.chars().take(300).collect::<String>()
+                );
             }
-            bail!(
-                "jev returned {status}: {}",
-                text.chars().take(300).collect::<String>()
-            );
+            tokio::time::sleep(delay).await;
+            delay *= 2;
         }
-        unreachable!()
+        unreachable!("the loop only ends by returning")
     }
+
+    fn request(&self, body: &Value, images: &[Image]) -> Result<reqwest::RequestBuilder> {
+        let req = self.http.post(ENDPOINT).bearer_auth(&self.key);
+        if images.is_empty() {
+            return Ok(req.json(body));
+        }
+        Ok(req
+            .header("TypeSafe-Danger-Zone-Images", "true")
+            .multipart(multipart(body, images)?))
+    }
+}
+
+/// 429 rate limited / 529 overloaded are worth retrying, three times.
+pub fn retryable(status: u16, attempt: u32) -> bool {
+    matches!(status, 429 | 529) && attempt < 3
+}
+
+fn multipart(body: &Value, images: &[Image]) -> Result<Form> {
+    let mut form = Form::new().part(
+        "request",
+        Part::text(body.to_string()).mime_str("application/json")?,
+    );
+    for (i, img) in images.iter().enumerate() {
+        form = form.part(
+            part_name(i),
+            Part::bytes(img.jpeg.clone())
+                .file_name(format!("{}.jpg", part_name(i)))
+                .mime_str("image/jpeg")?,
+        );
+    }
+    Ok(form)
 }
 
 fn part_name(i: usize) -> String {
@@ -274,6 +285,15 @@ mod tests {
             json!({ "type": "noul", "instructions": "q" })
         );
         assert!(no_crit.get("assets").is_none());
+    }
+
+    #[test]
+    fn retries_only_overload_three_times() {
+        assert!(retryable(429, 0));
+        assert!(retryable(529, 2));
+        assert!(!retryable(529, 3));
+        assert!(!retryable(500, 0));
+        assert!(!retryable(401, 0));
     }
 
     #[test]

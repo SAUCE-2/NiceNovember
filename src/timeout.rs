@@ -170,6 +170,24 @@ async fn mute(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: Use
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseStep {
+    /// Nothing to undo: just drop the row.
+    Drop,
+    /// Lift the bot's server mute, then drop the row.
+    Unmute,
+    /// Owed an unmute but not in VC, where Discord can't lift it: keep the row for later.
+    Wait,
+}
+
+pub fn release_step(voice_muted: bool, in_voice: bool) -> ReleaseStep {
+    match (voice_muted, in_voice) {
+        (false, _) => ReleaseStep::Drop,
+        (true, true) => ReleaseStep::Unmute,
+        (true, false) => ReleaseStep::Wait,
+    }
+}
+
 /// Lift a timeout that has ended: unmute them if the bot muted them, then drop the row. If
 /// they're owed an unmute but aren't in VC (a server mute sticks until lifted), the row stays and
 /// [`on_voice_join`] unmutes them when they're back.
@@ -178,14 +196,15 @@ pub async fn release(ctx: &serenity::Context, data: &Data, row: &TimeoutRow) -> 
         GuildId::new(row.guild_id as u64),
         UserId::new(row.user_id as u64),
     );
-    if row.voice_muted {
-        if voice_state(ctx, guild_id, user).is_none() {
-            return Ok(());
+    match release_step(row.voice_muted, voice_state(ctx, guild_id, user).is_some()) {
+        ReleaseStep::Wait => return Ok(()),
+        ReleaseStep::Unmute => {
+            let edit = EditMember::new()
+                .mute(false)
+                .audit_log_reason("NiceNovember: timeout over");
+            guild_id.edit_member(ctx, user, edit).await?;
         }
-        let edit = EditMember::new()
-            .mute(false)
-            .audit_log_reason("NiceNovember: timeout over");
-        guild_id.edit_member(ctx, user, edit).await?;
+        ReleaseStep::Drop => {}
     }
     data.db.delete_timeout(guild_id.get(), user.get()).await?;
     let log = Log::new(
@@ -340,6 +359,14 @@ mod tests {
         assert_eq!(method(s(false, false, 9)), Method::Forced, "above the bot");
         assert_eq!(method(s(true, false, 0)), Method::Forced, "owner");
         assert_eq!(method(s(false, true, 0)), Method::Forced, "admin");
+    }
+
+    #[test]
+    fn mutes_are_lifted_only_in_voice() {
+        assert_eq!(release_step(false, false), ReleaseStep::Drop);
+        assert_eq!(release_step(false, true), ReleaseStep::Drop);
+        assert_eq!(release_step(true, true), ReleaseStep::Unmute);
+        assert_eq!(release_step(true, false), ReleaseStep::Wait);
     }
 
     #[test]
