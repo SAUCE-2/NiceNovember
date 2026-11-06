@@ -64,7 +64,6 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/nice setup [role] [announce_channel] [log_channel] [voice_channel] [threshold]` | Setup checklist, fixing things in one go |
 | `/nice unset <log channel\|voice channel\|threshold>` | Clear an optional setting |
 | `/nice pardon <user>` | End someone's timeout early |
-| `/nice check <text> [spoken]` | See Jev's score for some text, without timing anyone out (for tuning the threshold) |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
 | `/stats summary [month]` | How much has been logged, by kind |
