@@ -13,6 +13,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use poise::serenity_prelude::{self as serenity, ChannelId, GuildId, UserId};
 use serde_json::json;
+use songbird::events::context_data::DisconnectReason;
 use songbird::events::{CoreEvent, Event, EventContext, EventHandler};
 use tokio::sync::mpsc;
 
@@ -66,6 +67,19 @@ impl Listening {
     fn join_failed(&mut self, error: &str) -> bool {
         self.channel = None;
         self.last_error.replace(error.to_owned()).as_deref() != Some(error)
+    }
+
+    /// The voice connection ended. Songbird keeps naming the channel of a session that failed
+    /// (e.g. after the gateway reconnected), so stop listening and let [`ensure`] rejoin.
+    /// Leaving or being moved on purpose isn't a failure: that's handled where it happens.
+    /// Returns whether it was one.
+    fn disconnected(&mut self, reason: Option<DisconnectReason>) -> bool {
+        use DisconnectReason::{AttemptDiscarded, Requested};
+        let dropped = reason.is_some_and(|r| !matches!(r, Requested | AttemptDiscarded));
+        if dropped {
+            self.channel = None;
+        }
+        dropped
     }
 
     fn speaking(&mut self, ssrc: u32, user: UserId) {
@@ -225,11 +239,15 @@ async fn join(
             tx: data.monitor.sender(ctx, data),
         };
         call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), rx.clone());
+        call.add_global_event(CoreEvent::DriverDisconnect.into(), rx.clone());
         call.add_global_event(CoreEvent::VoiceTick.into(), rx);
-        call.mute(true).await.ok(); // it only listens
+        // Forget any old session without telling Discord: songbird would reuse a dead one rather
+        // than ask for a new one, and a "left voice" sent now would cancel the join behind it.
+        call.update_state(String::new(), None::<songbird::id::ChannelId>);
     }
     let log = match manager.join(guild_id, channel).await {
-        Ok(_) => {
+        Ok(call) => {
+            call.lock().await.mute(true).await.ok(); // it only listens
             tracing::info!(%guild_id, %channel, "monitoring voice");
             Log::new(kind::MONITOR_JOINED, json!({}))
         }
@@ -366,6 +384,11 @@ impl EventHandler for Receiver {
                     s.speaking(sp.ssrc, UserId::new(u.0));
                 }
             }
+            EventContext::DriverDisconnect(d) => {
+                if s.disconnected(d.reason) {
+                    tracing::warn!(guild_id = %self.guild_id, reason = ?d.reason, "voice dropped");
+                }
+            }
             EventContext::VoiceTick(tick) => {
                 let channel = s.channel?;
                 let speaking = tick
@@ -430,6 +453,22 @@ mod tests {
         assert!(l.join_failed("other"));
         l.joined(ChannelId::new(1));
         assert!(l.join_failed("other"), "joining forgets the last error");
+    }
+
+    #[test]
+    fn a_dropped_connection_is_rejoined() {
+        let mut l = Listening::default();
+        l.joined(ChannelId::new(1));
+        assert!(!l.disconnected(Some(DisconnectReason::Requested)));
+        assert!(!l.disconnected(Some(DisconnectReason::AttemptDiscarded)));
+        assert!(!l.disconnected(None));
+        assert_eq!(l.channel, ch(1), "leaving or moving on purpose");
+        assert!(l.disconnected(Some(DisconnectReason::WsClosed(None))));
+        assert_eq!(
+            plan(ch(1), ch(1), l.channel),
+            Step::Join(ChannelId::new(1)),
+            "songbird still names the channel of a dead session"
+        );
     }
 
     #[test]
