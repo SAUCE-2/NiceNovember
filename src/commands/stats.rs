@@ -1,14 +1,12 @@
 use std::fmt::Write as _;
 
+use crate::app::Ctx;
+use crate::stats::{self, KindCount, SaidHighlight, UserHighlights, UserStats};
 use anyhow::{Context as _, Result, bail};
 use poise::CreateReply;
 use poise::serenity_prelude::{
     self as serenity, CreateAllowedMentions, CreateAttachment, CreateEmbed,
 };
-use serde_json::Value;
-
-use crate::app::Ctx;
-use crate::stats::{self, KindCount, LogRow, UserStats};
 
 /// Discord's upload limit for servers without boosts is 10 MiB.
 const MAX_UPLOAD: usize = 9_500_000;
@@ -17,32 +15,21 @@ fn guild(ctx: Ctx<'_>) -> Result<serenity::GuildId> {
     ctx.guild_id().context("use this in a server")
 }
 
-/// Aggregated stats for a user: messages, VC, judgements, and recent things they said.
+/// Top Trumps card for a user: meanest/nicest lines plus a few aggregates.
 #[poise::command(slash_command, guild_only)]
 pub async fn stats(
     ctx: Ctx<'_>,
     #[description = "Whose stats to show"] user: serenity::User,
-    #[description = "How many recent judged things to show (default 10)"]
-    #[min = 1]
-    #[max = 25]
-    count: Option<i64>,
 ) -> Result<()> {
     let guild_id = guild(ctx)?;
     let data = ctx.data();
     let uid = user.id.get();
     let s = data.db.user_stats(guild_id.get(), uid).await?;
-    let recent = data
-        .db
-        .user_recent_judged(guild_id.get(), uid, count.unwrap_or(10))
-        .await?;
-
-    let mut text = format_user_stats(&s);
-    text.push('\n');
-    text.push_str(&format_recent_said(&recent));
+    let highlights = data.db.user_highlights(guild_id.get(), uid).await?;
 
     let embed = CreateEmbed::new()
-        .title(format!("📊 Stats · {}", user.display_name()))
-        .description(text)
+        .title(format!("🃏 {}", user.display_name()))
+        .description(format_user_card(&s, &highlights))
         .colour(0x3498db);
     // Channel-visible on purpose: this is the public call-out of how nice they've been.
     ctx.send(
@@ -158,55 +145,45 @@ fn format_kind_counts(counts: &[KindCount]) -> String {
     text
 }
 
-fn format_user_stats(s: &UserStats) -> String {
+fn format_user_card(s: &UserStats, h: &UserHighlights) -> String {
     let mut text = String::new();
-    let _ = writeln!(text, "**Messages:** {}", s.messages);
-    let _ = writeln!(text, "**Reactions:** {}", s.reactions);
     let _ = writeln!(
         text,
-        "**Heard in VC:** {} ({})",
-        s.heard,
-        fmt_ms(s.heard_audio_ms)
+        "**Meanest thing:** {}",
+        format_highlight(h.meanest.as_ref())
     );
-    let score = s
-        .avg_score
-        .map(|v| format!("avg {v:.2}"))
-        .unwrap_or_else(|| "—".into());
-    let _ = writeln!(text, "**Judged:** {} ({score})", s.judged);
-    let _ = writeln!(text, "**Hostile:** {}", s.hostile);
     let _ = writeln!(
         text,
-        "**Timeouts:** {} ({})",
+        "**Friendliest thing:** {}",
+        format_highlight(h.friendliest.as_ref())
+    );
+    let avg = s
+        .avg_score
+        .map(|v| format!("{v:.2}"))
+        .unwrap_or_else(|| "—".into());
+    let _ = writeln!(
+        text,
+        "**Hostility:** avg {avg} · {} hostile · {} timeouts ({})",
+        s.hostile,
         s.timed_out,
         fmt_secs(s.timeout_secs)
     );
-    let _ = write!(text, "**Time in VC:** {}", fmt_secs(s.vc_secs));
+    let _ = write!(
+        text,
+        "**Presence:** {} messages · {} in VC · {} of speech",
+        s.messages,
+        fmt_secs(s.vc_secs),
+        fmt_ms(s.heard_audio_ms)
+    );
     text
 }
 
-fn format_recent_said(rows: &[LogRow]) -> String {
-    let mut text = String::from("**Recently said:**\n");
-    if rows.is_empty() {
-        text.push_str("Nothing judged yet.");
-        return text;
-    }
-    for r in rows {
-        let d: Value = serde_json::from_str(&r.data).unwrap_or_default();
-        let said: String = d["said"].as_str().unwrap_or("").chars().take(120).collect();
-        let at = crate::db::parse_time(&r.at).map_or(0, |t| t.timestamp());
-        let mark = if d["hostile"].as_bool() == Some(true) {
-            "🚫"
-        } else {
-            "·"
-        };
-        let _ = writeln!(
-            text,
-            "{mark} <t:{at}:R> ({}, {:.2}): {said}",
-            d["source"].as_str().unwrap_or("?"),
-            d["score"].as_f64().unwrap_or(0.0),
-        );
-    }
-    text
+fn format_highlight(h: Option<&SaidHighlight>) -> String {
+    let Some(h) = h else {
+        return "—".into();
+    };
+    let said: String = h.said.chars().take(100).collect();
+    format!("\"{said}\" ({:.2} · {})", h.score, h.source)
 }
 
 fn fmt_secs(secs: i64) -> String {
@@ -278,11 +255,12 @@ mod tests {
     }
 
     #[test]
-    fn user_stats_text() {
-        let empty = format_user_stats(&UserStats::default());
-        assert!(empty.contains("**Messages:** 0"));
-        assert!(empty.contains("**Judged:** 0 (—)"));
-        assert!(empty.contains("**Time in VC:** 0s"));
+    fn user_card_text() {
+        let empty = format_user_card(&UserStats::default(), &UserHighlights::default());
+        assert!(empty.contains("**Meanest thing:** —"));
+        assert!(empty.contains("**Friendliest thing:** —"));
+        assert!(empty.contains("**Hostility:** avg — · 0 hostile · 0 timeouts (0s)"));
+        assert!(empty.contains("**Presence:** 0 messages · 0s in VC · 0s of speech"));
 
         let s = UserStats {
             messages: 3,
@@ -296,42 +274,23 @@ mod tests {
             timeout_secs: 180,
             vc_secs: 3600,
         };
-        let text = format_user_stats(&s);
-        assert!(text.contains("**Heard in VC:** 2 (1m 30s)"));
-        assert!(text.contains("**Judged:** 4 (avg 0.42)"));
-        assert!(text.contains("**Timeouts:** 2 (3m)"));
-        assert!(text.contains("**Time in VC:** 1h"));
-    }
-
-    #[test]
-    fn recent_said_text() {
-        assert_eq!(
-            format_recent_said(&[]),
-            "**Recently said:**\nNothing judged yet."
-        );
-        let hostile = LogRow {
-            id: 1,
-            user_id: Some(7),
-            channel_id: None,
-            kind: "judged".into(),
-            participant: Some(true),
-            data: r#"{"said":"be mean","score":0.9,"source":"voice","hostile":true}"#.into(),
-            day: "2026-11-06".into(),
-            at: "2026-11-06T12:00:00.000Z".into(),
+        let h = UserHighlights {
+            meanest: Some(SaidHighlight {
+                said: "you're the worst".into(),
+                score: 0.9,
+                source: "voice".into(),
+            }),
+            friendliest: Some(SaidHighlight {
+                said: "have a nice day".into(),
+                score: 0.1,
+                source: "message".into(),
+            }),
         };
-        let nice = LogRow {
-            id: 2,
-            user_id: Some(7),
-            channel_id: None,
-            kind: "judged".into(),
-            participant: Some(true),
-            data: r#"{"said":"hello","score":0.1,"source":"message","hostile":false}"#.into(),
-            day: "2026-11-06".into(),
-            at: "not-a-time".into(),
-        };
-        let text = format_recent_said(&[hostile, nice]);
-        assert!(text.contains("🚫"));
-        assert!(text.contains("(voice, 0.90): be mean"));
-        assert!(text.contains("· <t:0:R> (message, 0.10): hello"));
+        let text = format_user_card(&s, &h);
+        assert!(text.contains("**Meanest thing:** \"you're the worst\" (0.90 · voice)"));
+        assert!(text.contains("**Friendliest thing:** \"have a nice day\" (0.10 · message)"));
+        assert!(text.contains("**Hostility:** avg 0.42 · 1 hostile · 2 timeouts (3m)"));
+        assert!(text.contains("**Presence:** 3 messages · 1h in VC · 1m 30s of speech"));
+        assert!(!text.contains("Recently said"));
     }
 }
