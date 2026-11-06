@@ -324,15 +324,14 @@ impl Db {
         Ok(n > 0)
     }
 
-    /// Timeouts in force right now, in one guild or all of them.
-    pub async fn active_timeouts(&self, guild_id: Option<u64>) -> Result<i64> {
-        let (n,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM timeouts WHERE (?1 IS NULL OR guild_id = ?1) AND until > ?2",
-        )
-        .bind(guild_id.map(|g| g as i64))
-        .bind(now())
-        .fetch_one(&self.0)
-        .await?;
+    /// Timeouts in force right now, in one guild.
+    pub async fn active_timeouts(&self, guild_id: u64) -> Result<i64> {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM timeouts WHERE guild_id = ?1 AND until > ?2")
+                .bind(guild_id as i64)
+                .bind(now())
+                .fetch_one(&self.0)
+                .await?;
         Ok(n)
     }
 }
@@ -431,8 +430,8 @@ mod tests {
 
         db.start_timeout(1, 7, soon, Method::Forced).await.unwrap();
         assert!(db.timed_out(1, 7).await.unwrap().is_some());
-        assert_eq!(db.active_timeouts(None).await.unwrap(), 1);
-        assert_eq!(db.active_timeouts(Some(2)).await.unwrap(), 0);
+        assert_eq!(db.active_timeouts(1).await.unwrap(), 1);
+        assert_eq!(db.active_timeouts(2).await.unwrap(), 0);
 
         // A shorter one doesn't cut it short, but the method follows the latest.
         db.start_timeout(1, 7, Utc::now(), Method::Native)
