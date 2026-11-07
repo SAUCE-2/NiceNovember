@@ -101,14 +101,36 @@ async fn announce(ctx: &serenity::Context, gcfg: &GuildConfig, u: &Utterance, sc
     let Some(ch) = gcfg.announce_channel_id else {
         return false;
     };
-    let msg = CreateMessage::new()
-        .content(hostility::announcement(u, score, gcfg.shadow))
-        .allowed_mentions(CreateAllowedMentions::new());
+    let msg = call_out(u, score, gcfg.shadow);
     match ChannelId::new(ch as u64).send_message(ctx, msg).await {
         Ok(_) => true,
         Err(e) => {
             tracing::warn!(channel = ch, "announcement failed: {e}");
             false
         }
+    }
+}
+
+fn call_out(u: &Utterance, score: f32, shadow: bool) -> CreateMessage {
+    CreateMessage::new()
+        .content(hostility::announcement(u, score, shadow))
+        .allowed_mentions(CreateAllowedMentions::new().users([u.user]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hostility::{Source, utterance};
+
+    #[test]
+    fn call_outs_ping_only_the_person_quoted() {
+        let mut u = utterance(Source::Message, "<@8> you suck @everyone <@&5>");
+        u.user = serenity::UserId::new(7);
+        let msg = serde_json::to_value(call_out(&u, 0.9, false)).unwrap();
+        assert!(msg["content"].as_str().unwrap().contains("<@7>"));
+        assert_eq!(
+            msg["allowed_mentions"],
+            json!({ "parse": [], "users": ["7"], "roles": [] })
+        );
     }
 }
