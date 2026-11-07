@@ -197,8 +197,9 @@ fn quote_in_context(u: &Utterance) -> String {
     before.chain([own]).collect::<Vec<_>>().join("\n")
 }
 
-/// The public call-out posted to the announce channel, with Jev's score as a percentage. In
-/// shadow mode it says nobody was timed out.
+/// The public call-out posted to the announce channel, with Jev's score as how sure it is that
+/// this was hostile (a probability, not how hostile it was). In shadow mode it says nobody was
+/// timed out.
 pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     let (did, quoted) = match u.source {
         Source::Voice => (format!("said in 🔊 <#{}>", u.channel), quote_in_context(u)),
@@ -212,7 +213,7 @@ pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
             quote(u.in_reply_to.as_deref().unwrap_or_default()),
         ),
     };
-    let percent = format!("{:.0}% hostile", score * 100.0);
+    let percent = format!("{:.0}% sure it's hostile", score * 100.0);
     let verdict = if shadow {
         format!("👻 **Not nice** ({percent}, shadow mode: not timed out)")
     } else {
@@ -329,7 +330,7 @@ mod tests {
     fn announcements_say_where() {
         assert_eq!(
             announcement(&utterance(Source::Voice, "shut up"), 0.874, false),
-            "🚫 **Not nice!** (87% hostile) <@7> said in 🔊 <#9>:\n> Sam: **shut up**"
+            "🚫 **Not nice!** (87% sure it's hostile) <@7> said in 🔊 <#9>:\n> Sam: **shut up**"
         );
         let say = |source| announcement(&utterance(source, "x"), 0.7, false);
         assert!(say(Source::Message).contains("said in <#9>:"));
@@ -338,7 +339,7 @@ mod tests {
         r.in_reply_to = Some("I won".into());
         assert_eq!(
             announcement(&r, 1.0, false),
-            "🚫 **Not nice!** (100% hostile) <@7> reacted 🖕 in <#9> to:\n> I won"
+            "🚫 **Not nice!** (100% sure it's hostile) <@7> reacted 🖕 in <#9> to:\n> I won"
         );
     }
 
@@ -346,7 +347,7 @@ mod tests {
     fn shadow_announcements_say_nobody_was_timed_out() {
         assert_eq!(
             announcement(&utterance(Source::Message, "you suck"), 0.716, true),
-            "👻 **Not nice** (72% hostile, shadow mode: not timed out) <@7> said in <#9>:\n\
+            "👻 **Not nice** (72% sure it's hostile, shadow mode: not timed out) <@7> said in <#9>:\n\
              > you suck"
         );
     }
