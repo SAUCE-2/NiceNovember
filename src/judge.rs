@@ -1,5 +1,5 @@
 //! Judging what participants say, and dealing with it when it's hostile: a timeout, a public
-//! quote in the announce channel, details in the log channel, and all of it in the activity log.
+//! quote with Jev's score in the announce channel, and all of it in the activity log.
 
 use std::time::Instant;
 
@@ -67,15 +67,13 @@ pub async fn judge(
         return Ok(());
     }
     if gcfg.shadow {
-        if let Some(ch) = gcfg.log_channel_id {
-            send(ctx, ch, shadow_report(guild_id, &u, score, threshold)).await;
-        }
+        announce(ctx, &gcfg, &u, score).await;
         return Ok(());
     }
 
     let reason = format!("hostile, jev {score:.2}: {}", u.said);
     let applied = timeout::time_out(ctx, data, guild_id, u.user, &reason).await;
-    let announced = announce(ctx, &gcfg, &u).await;
+    let announced = announce(ctx, &gcfg, &u, score).await;
     let (muted, error) = match &applied {
         Ok(a) => (a.muted, None),
         Err(e) => {
@@ -83,13 +81,6 @@ pub async fn judge(
             (false, Some(format!("{e:#}")))
         }
     };
-    let outcome = outcome(&applied);
-    post_log(
-        ctx,
-        &gcfg,
-        details(guild_id, &u, score, threshold, &outcome),
-    )
-    .await;
     let entry = json!({
         "score": score,
         "threshold": threshold,
@@ -101,13 +92,13 @@ pub async fn judge(
     Ok(())
 }
 
-/// Post the quote to the announce channel (log channel if none). Returns whether it was posted.
-async fn announce(ctx: &serenity::Context, gcfg: &GuildConfig, u: &Utterance) -> bool {
-    let Some(ch) = gcfg.announce_channel_id.or(gcfg.log_channel_id) else {
+/// Post the quote to the announce channel. Returns whether it was posted.
+async fn announce(ctx: &serenity::Context, gcfg: &GuildConfig, u: &Utterance, score: f32) -> bool {
+    let Some(ch) = gcfg.announce_channel_id else {
         return false;
     };
     let msg = CreateMessage::new()
-        .content(hostility::announcement(u))
+        .content(hostility::announcement(u, score, gcfg.shadow))
         .allowed_mentions(CreateAllowedMentions::new());
     match ChannelId::new(ch as u64).send_message(ctx, msg).await {
         Ok(_) => true,
@@ -115,104 +106,5 @@ async fn announce(ctx: &serenity::Context, gcfg: &GuildConfig, u: &Utterance) ->
             tracing::warn!(channel = ch, "announcement failed: {e}");
             false
         }
-    }
-}
-
-fn outcome(applied: &Result<timeout::Applied>) -> String {
-    match applied {
-        Ok(a) if a.muted => "timed out, server-muted and deafened".into(),
-        Ok(_) => "timed out".into(),
-        Err(e) => format!("timeout failed: {e}"),
-    }
-}
-
-fn details(guild_id: GuildId, u: &Utterance, score: f32, threshold: f32, outcome: &str) -> String {
-    let link = u.message.map_or(String::new(), |m| {
-        format!(
-            " · [message](https://discord.com/channels/{guild_id}/{}/{m})",
-            u.channel
-        )
-    });
-    format!(
-        "🔎 <@{}> · {:?} in <#{}> · jev {score:.2} (threshold {threshold:.2}) · {outcome}{link}",
-        u.user, u.source, u.channel
-    )
-}
-
-/// The log line for a hostile verdict in shadow mode, quoting what was said since nothing else
-/// does.
-fn shadow_report(guild_id: GuildId, u: &Utterance, score: f32, threshold: f32) -> String {
-    let outcome = "👻 shadow mode, would have been timed out";
-    format!(
-        "{}\n{}",
-        details(guild_id, u, score, threshold, outcome),
-        hostility::quote(&u.said)
-    )
-}
-
-/// Post to the log channel, if it's set and isn't the announce channel. Failures are traced.
-pub async fn post_log(ctx: &serenity::Context, gcfg: &GuildConfig, content: String) {
-    let Some(ch) = gcfg.log_channel_id else {
-        return;
-    };
-    if gcfg.announce_channel_id == Some(ch) {
-        return;
-    }
-    send(ctx, ch, content).await;
-}
-
-async fn send(ctx: &serenity::Context, ch: i64, content: String) {
-    let msg = CreateMessage::new()
-        .content(content)
-        .allowed_mentions(CreateAllowedMentions::new());
-    if let Err(e) = ChannelId::new(ch as u64).send_message(ctx, msg).await {
-        tracing::warn!(channel = ch, "log post failed: {e}");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::hostility::Source;
-    use poise::serenity_prelude::{MessageId, UserId};
-
-    fn u(message: Option<u64>) -> Utterance {
-        Utterance {
-            user: UserId::new(7),
-            channel: ChannelId::new(9),
-            source: Source::Message,
-            said: "x".into(),
-            message: message.map(MessageId::new),
-            in_reply_to: None,
-            call: None,
-        }
-    }
-
-    #[test]
-    fn details_explain_what_happened() {
-        let g = GuildId::new(1);
-        let applied = |muted| {
-            Ok(timeout::Applied {
-                until: chrono::Utc::now(),
-                muted,
-            })
-        };
-        assert_eq!(
-            details(g, &u(Some(5)), 0.912, 0.7, &outcome(&applied(true))),
-            "🔎 <@7> · Message in <#9> · jev 0.91 (threshold 0.70) · timed out, server-muted \
-             and deafened · [message](https://discord.com/channels/1/9/5)"
-        );
-        assert_eq!(outcome(&applied(false)), "timed out");
-        let failed = Err(anyhow::anyhow!("database is locked"));
-        assert_eq!(outcome(&failed), "timeout failed: database is locked");
-    }
-
-    #[test]
-    fn shadow_report_says_what_would_have_happened() {
-        assert_eq!(
-            shadow_report(GuildId::new(1), &u(Some(5)), 0.912, 0.7),
-            "🔎 <@7> · Message in <#9> · jev 0.91 (threshold 0.70) · 👻 shadow mode, \
-             would have been timed out · [message](https://discord.com/channels/1/9/5)\n> x"
-        );
     }
 }

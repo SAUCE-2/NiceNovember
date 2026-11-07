@@ -101,8 +101,9 @@ pub fn quote(said: &str) -> String {
         .join("\n")
 }
 
-/// The public call-out posted to the announce channel.
-pub fn announcement(u: &Utterance) -> String {
+/// The public call-out posted to the announce channel, with Jev's score as a percentage. In
+/// shadow mode it says nobody was timed out.
+pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     let (did, quoted) = match u.source {
         Source::Voice => (format!("said in 🔊 <#{}>", u.channel), u.said.as_str()),
         Source::Message => (format!("said in <#{}>", u.channel), u.said.as_str()),
@@ -115,7 +116,13 @@ pub fn announcement(u: &Utterance) -> String {
             u.in_reply_to.as_deref().unwrap_or_default(),
         ),
     };
-    format!("🚫 **Not nice!** <@{}> {did}:\n{}", u.user, quote(quoted))
+    let percent = format!("{:.0}% hostile", score * 100.0);
+    let verdict = if shadow {
+        format!("👻 **Not nice** ({percent}, shadow mode: not timed out)")
+    } else {
+        format!("🚫 **Not nice!** ({percent})")
+    };
+    format!("{verdict} <@{}> {did}:\n{}", u.user, quote(quoted))
 }
 
 /// Whisper's non-speech markers like `[BLANK_AUDIO]`, `(music)` or `*coughs*`, and leftover
@@ -186,16 +193,26 @@ mod tests {
     #[test]
     fn announcements_say_where() {
         assert_eq!(
-            announcement(&utterance(Source::Voice, "shut up")),
-            "🚫 **Not nice!** <@7> said in 🔊 <#9>:\n> shut up"
+            announcement(&utterance(Source::Voice, "shut up"), 0.874, false),
+            "🚫 **Not nice!** (87% hostile) <@7> said in 🔊 <#9>:\n> shut up"
         );
-        assert!(announcement(&utterance(Source::Message, "x")).contains("said in <#9>:"));
-        assert!(announcement(&utterance(Source::Edit, "x")).contains("in an edit in <#9>"));
+        let say = |source| announcement(&utterance(source, "x"), 0.7, false);
+        assert!(say(Source::Message).contains("said in <#9>:"));
+        assert!(say(Source::Edit).contains("in an edit in <#9>"));
         let mut r = utterance(Source::Reaction, "🖕");
         r.in_reply_to = Some("I won".into());
         assert_eq!(
-            announcement(&r),
-            "🚫 **Not nice!** <@7> reacted 🖕 in <#9> to:\n> I won"
+            announcement(&r, 1.0, false),
+            "🚫 **Not nice!** (100% hostile) <@7> reacted 🖕 in <#9> to:\n> I won"
+        );
+    }
+
+    #[test]
+    fn shadow_announcements_say_nobody_was_timed_out() {
+        assert_eq!(
+            announcement(&utterance(Source::Message, "you suck"), 0.716, true),
+            "👻 **Not nice** (72% hostile, shadow mode: not timed out) <@7> said in <#9>:\n\
+             > you suck"
         );
     }
 

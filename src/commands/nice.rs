@@ -53,16 +53,12 @@ async fn setup(
     #[description = "Where hostile quotes are posted"]
     #[channel_types("Text", "News")]
     announce_channel: Option<Channel>,
-    #[description = "Where details and setup notices go (default: the announce channel)"]
-    #[channel_types("Text", "News")]
-    log_channel: Option<Channel>,
     #[description = "The voice channel I always sit in and listen to"]
     #[channel_types("Voice", "Stage")]
     voice_channel: Option<Channel>,
     #[description = "Jev score that counts as hostile, 0.05 to 1 (default 0.7). Lower = stricter"]
     threshold: Option<f64>,
-    #[description = "Judge as usual, but only report would-be timeouts to the log channel"]
-    shadow: Option<bool>,
+    #[description = "Judge and announce as usual, but don't time anyone out"] shadow: Option<bool>,
 ) -> Result<()> {
     let guild_id = guild(ctx)?;
     let data = ctx.data();
@@ -74,7 +70,6 @@ async fn setup(
     let changes = SetupChanges {
         participant_role: role.map(|r| r.id.get()),
         announce_channel: announce_channel.map(|c| c.id().get()),
-        log_channel: log_channel.map(|c| c.id().get()),
         voice_channel: voice_channel.map(|c| c.id().get()),
         threshold,
         shadow,
@@ -105,8 +100,6 @@ async fn setup(
 
 #[derive(Debug, poise::ChoiceParameter)]
 enum Setting {
-    #[name = "log channel"]
-    LogChannel,
     #[name = "voice channel (stop listening)"]
     VoiceChannel,
     #[name = "threshold (back to default)"]
@@ -119,10 +112,6 @@ async fn unset(ctx: Ctx<'_>, setting: Setting) -> Result<()> {
     let guild_id = guild(ctx)?;
     let data = ctx.data();
     let (what, clear) = match setting {
-        Setting::LogChannel => (
-            "log channel: details go to the announce channel now",
-            Clear::LogChannel,
-        ),
         Setting::VoiceChannel => ("voice channel: I've stopped listening", Clear::VoiceChannel),
         Setting::Threshold => ("threshold: back to the default", Clear::Threshold),
     };

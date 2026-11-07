@@ -29,13 +29,11 @@ impl<T> Setting<T> {
 pub struct Facts {
     pub role: Setting<()>,
     pub announce: Setting<()>,
-    pub log: Setting<()>,
     pub voice: Setting<ChannelType>,
     /// `None` if the bot's own member couldn't be looked up.
     pub bot_is_admin: Option<bool>,
     pub jev: bool,
     pub whisper: bool,
-    pub shadow: bool,
 }
 
 const FIX_ROLE: &str = "`/nice setup role:@Role`";
@@ -60,9 +58,6 @@ pub fn checklist(f: &Facts) -> Vec<String> {
         Setting::Deleted => add(format!("The announce channel was deleted → {FIX_ANNOUNCE}")),
         Setting::Present(()) => {}
     }
-    if f.log == Setting::Deleted {
-        add("The log channel was deleted → `/nice setup log_channel:#channel`".into());
-    }
     match f.voice {
         Setting::Unset => add(format!(
             "No monitored voice channel, so voice isn't judged → {FIX_VOICE}"
@@ -84,13 +79,6 @@ pub fn checklist(f: &Facts) -> Vec<String> {
     if !f.whisper && f.voice != Setting::Unset {
         add(
             "The Whisper model isn't loaded (check `WHISPER_MODEL`), so voice can't be transcribed"
-                .into(),
-        );
-    }
-    if f.shadow && f.log != Setting::Present(()) {
-        add(
-            "Shadow mode is on but there's no log channel, so would-be timeouts are only in \
-             the activity log → `/nice setup log_channel:#channel`"
                 .into(),
         );
     }
@@ -118,12 +106,10 @@ pub async fn problems(
                 g.roles.contains_key(&RoleId::new(r as u64)).then_some(())
             }),
             announce: Setting::of(gcfg.announce_channel_id, |c| channel(c).map(|_| ())),
-            log: Setting::of(gcfg.log_channel_id, |c| channel(c).map(|_| ())),
             voice: Setting::of(gcfg.voice_channel_id, channel),
             bot_is_admin: bot_member.map(|m| g.member_permissions(&m).administrator()),
             jev: data.jev.is_some(),
             whisper: data.stt.is_some(),
-            shadow: gcfg.shadow,
         }
     };
     Ok(checklist(&facts))
@@ -175,14 +161,14 @@ pub fn should_report(last: Option<&str>, fingerprint: &str) -> bool {
     last != Some(fingerprint) && !(fingerprint.is_empty() && last_was_ok)
 }
 
-/// Log channel → announce channel → system channel → first writable channel → DM the owner.
+/// Announce channel → system channel → first writable channel → DM the owner.
 async fn send(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg: CreateMessage) {
     let preferred = data
         .db
         .guild(guild_id.get())
         .await
         .ok()
-        .and_then(|g| g.log_or_announce());
+        .and_then(|g| g.announce_channel_id);
     let (candidates, owner) = {
         let Some(g) = ctx.cache.guild(guild_id) else {
             return;
@@ -224,12 +210,10 @@ mod tests {
         Facts {
             role: Setting::Present(()),
             announce: Setting::Present(()),
-            log: Setting::Unset,
             voice: Setting::Present(ChannelType::Voice),
             bot_is_admin: Some(true),
             jev: true,
             whisper: true,
-            shadow: false,
         }
     }
 
@@ -242,7 +226,6 @@ mod tests {
     #[test]
     fn all_set_up_is_empty() {
         assert!(checklist(&fine()).is_empty());
-        assert!(check(|f| f.log = Setting::Present(())).is_empty());
         assert!(check(|f| f.voice = Setting::Present(ChannelType::Stage)).is_empty());
         assert!(
             check(|f| f.bot_is_admin = None).is_empty(),
@@ -252,7 +235,6 @@ mod tests {
             check(|f| (f.voice, f.whisper) = (Setting::Unset, false)).len() == 1,
             "no Whisper only matters with a voice channel"
         );
-        assert!(check(|f| (f.shadow, f.log) = (true, Setting::Present(()))).is_empty());
     }
 
     #[test]
@@ -270,7 +252,6 @@ mod tests {
         assert!(
             one(|f| f.announce = Setting::Deleted).starts_with("The announce channel was deleted")
         );
-        assert!(one(|f| f.log = Setting::Deleted).starts_with("The log channel was deleted"));
         assert!(one(|f| f.voice = Setting::Unset).starts_with("No monitored voice channel"));
         assert!(
             one(|f| f.voice = Setting::Deleted)
@@ -283,7 +264,6 @@ mod tests {
         assert!(one(|f| f.bot_is_admin = Some(false)).contains("Administrator"));
         assert!(one(|f| f.jev = false).contains("JEV_API_KEY"));
         assert!(one(|f| f.whisper = false).contains("WHISPER_MODEL"));
-        assert!(one(|f| f.shadow = true).starts_with("Shadow mode is on but there's no log"));
     }
 
     #[test]
