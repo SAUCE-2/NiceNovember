@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use super::conversation::Conversation;
 use super::segmenter::{Limits, Segmenter};
 use crate::app::Data;
-use crate::hostility::{self, Call, Line, Source, Utterance};
+use crate::hostility::{self, Line, Source, Utterance};
 use crate::stats::{self, Log, kind};
 
 /// One finished speech segment, waiting to be transcribed.
@@ -346,6 +346,7 @@ async fn on_heard(ctx: &serenity::Context, data: &Data, h: Heard) -> Result<()> 
     let Some(stt) = &data.stt else {
         return Ok(());
     };
+    let at = chrono::Utc::now();
     let audio_ms = h.pcm.len() as u64 * 1000 / 16_000;
     let started = Instant::now();
     let raw = stt.transcribe(h.pcm).await?;
@@ -366,6 +367,7 @@ async fn on_heard(ctx: &serenity::Context, data: &Data, h: Heard) -> Result<()> 
     let line = Line {
         speaker: speaker.clone(),
         said: text.clone(),
+        at,
     };
     let recent = data
         .monitor
@@ -373,19 +375,18 @@ async fn on_heard(ctx: &serenity::Context, data: &Data, h: Heard) -> Result<()> 
         .lock()
         .unwrap()
         .conversation
-        .next(Instant::now(), line);
+        .next(line);
     let u = Utterance {
         user: h.user,
         channel: h.channel,
         source: Source::Voice,
+        author: speaker,
         said: text,
+        at,
         message: None,
         in_reply_to: None,
-        call: Some(Call {
-            speaker,
-            in_call,
-            recent,
-        }),
+        recent,
+        in_call,
     };
     crate::judge::judge(ctx, data, h.guild_id, u, vec![]).await
 }

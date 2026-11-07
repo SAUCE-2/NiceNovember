@@ -6,7 +6,7 @@ use poise::serenity_prelude::Message;
 use serde_json::{Value, json};
 
 use crate::app::Data;
-use crate::hostility::{Call, Source, Utterance};
+use crate::hostility::{STAMP, Source, Utterance};
 use jev::{Image, normalize_image, noul};
 
 /// Max images per message sent to Jev (keeps requests small and fast).
@@ -62,10 +62,16 @@ fn placeholders(images: &[Image]) -> Vec<&str> {
     images.iter().map(|i| i.placeholder.as_str()).collect()
 }
 
-/// Jev `state` for something said: its text, plus what it replies to and images.
-pub fn utterance_state(text: &str, in_reply_to: Option<&str>, images: &[Image]) -> Value {
-    let mut state = json!({ "message_text": text });
-    if let Some(r) = in_reply_to {
+/// Jev `state` for a chat message: who sent it when, the conversation before it, what it replies
+/// to, and images.
+pub fn text_state(u: &Utterance, images: &[Image]) -> Value {
+    let mut state = json!({
+        "author": u.author,
+        "message_text": u.said,
+        "sent_at": u.at.format(STAMP).to_string(),
+        "recent_messages": u.recent,
+    });
+    if let Some(r) = &u.in_reply_to {
         state["replying_to_message"] = json!(r);
     }
     if !images.is_empty() {
@@ -75,12 +81,13 @@ pub fn utterance_state(text: &str, in_reply_to: Option<&str>, images: &[Image]) 
 }
 
 /// Jev `state` for something said in the voice call, with who's there and what came before.
-pub fn voice_state(said: &str, call: &Call) -> Value {
+pub fn voice_state(u: &Utterance) -> Value {
     json!({
-        "speaker": call.speaker,
-        "said_now": said,
-        "people_in_call": call.in_call,
-        "recent_conversation": call.recent,
+        "speaker": u.author,
+        "said_now": u.said,
+        "said_at": u.at.format(STAMP).to_string(),
+        "people_in_call": u.in_call,
+        "recent_conversation": u.recent,
     })
 }
 
@@ -95,11 +102,14 @@ pub fn reaction_state(emoji: &str, on_message: &str, images: &[Image]) -> Value 
 
 /// Jev `state` for any utterance: the form for its source.
 pub fn state_for(u: &Utterance, images: &[Image]) -> Value {
-    let context = u.in_reply_to.as_deref();
-    match (&u.call, u.source) {
-        (Some(call), _) => voice_state(&u.said, call),
-        (None, Source::Reaction) => reaction_state(&u.said, context.unwrap_or_default(), images),
-        (None, _) => utterance_state(&u.said, context, images),
+    match u.source {
+        Source::Voice => voice_state(u),
+        Source::Reaction => reaction_state(
+            &u.said,
+            u.in_reply_to.as_deref().unwrap_or_default(),
+            images,
+        ),
+        Source::Message | Source::Edit => text_state(u, images),
     }
 }
 
@@ -127,68 +137,71 @@ pub async fn ask_noul(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hostility::Line;
+    use crate::hostility::{Line, utterance};
     use poise::serenity_prelude::{Attachment, Embed};
 
+    fn alex(said: &str) -> Line {
+        Line {
+            speaker: "Alex".into(),
+            said: said.into(),
+            at: chrono::DateTime::UNIX_EPOCH,
+        }
+    }
+
     #[test]
-    fn state_shapes() {
-        assert_eq!(
-            utterance_state("hi", None, &[]),
-            json!({ "message_text": "hi" })
-        );
+    fn text_state_shape() {
+        let mut u = utterance(Source::Message, "no u");
+        u.recent = vec![alex("you're dumb")];
+        u.in_reply_to = Some("you're dumb".into());
         let img = Image {
             placeholder: "image-1-1".into(),
             jpeg: vec![],
         };
         assert_eq!(
-            utterance_state("hi", None, std::slice::from_ref(&img)),
-            json!({ "message_text": "hi", "attached_images": ["image-1-1"] })
+            text_state(&u, &[img]),
+            json!({
+                "author": "Sam",
+                "message_text": "no u",
+                "sent_at": "1970-01-01 00:00:00 UTC",
+                "recent_messages": [
+                    { "speaker": "Alex", "said": "you're dumb", "at": "1970-01-01 00:00:00 UTC" }
+                ],
+                "replying_to_message": "you're dumb",
+                "attached_images": ["image-1-1"],
+            })
         );
-        assert_eq!(
-            utterance_state("no u", Some("you're dumb"), &[]),
-            json!({ "message_text": "no u", "replying_to_message": "you're dumb" })
-        );
+        let bare = text_state(&utterance(Source::Message, "hi"), &[]);
+        assert!(bare.get("replying_to_message").is_none());
+        assert!(bare.get("attached_images").is_none());
     }
 
     #[test]
     fn voice_state_shape() {
-        let call = Call {
-            speaker: "Sam".into(),
-            in_call: vec!["Sam".into(), "Alex".into()],
-            recent: vec![Line {
-                speaker: "Alex".into(),
-                said: "I carried that round".into(),
-            }],
-        };
+        let mut u = utterance(Source::Voice, "shut up, you were useless");
+        u.in_call = vec!["Sam".into(), "Alex".into()];
+        u.recent = vec![alex("I carried that round")];
         assert_eq!(
-            voice_state("shut up, you were useless", &call),
+            voice_state(&u),
             json!({
                 "speaker": "Sam",
                 "said_now": "shut up, you were useless",
+                "said_at": "1970-01-01 00:00:00 UTC",
                 "people_in_call": ["Sam", "Alex"],
-                "recent_conversation": [{ "speaker": "Alex", "said": "I carried that round" }],
+                "recent_conversation": [
+                    { "speaker": "Alex", "said": "I carried that round", "at": "1970-01-01 00:00:00 UTC" }
+                ],
             })
         );
     }
 
     #[test]
     fn state_follows_the_source() {
-        let mut u = Utterance {
-            user: poise::serenity_prelude::UserId::new(1),
-            channel: poise::serenity_prelude::ChannelId::new(2),
-            source: crate::hostility::Source::Voice,
-            said: "hi".into(),
-            message: None,
-            in_reply_to: Some("yo".into()),
-            call: Some(Call::default()),
-        };
+        let mut u = utterance(Source::Voice, "hi");
+        u.in_reply_to = Some("yo".into());
         assert_eq!(state_for(&u, &[])["said_now"], "hi");
-        u.call = None;
-        assert_eq!(
-            state_for(&u, &[]),
-            json!({ "message_text": "hi", "replying_to_message": "yo" })
-        );
-        u.source = crate::hostility::Source::Reaction;
+        u.source = Source::Edit;
+        assert_eq!(state_for(&u, &[])["message_text"], "hi");
+        u.source = Source::Reaction;
         u.said = "🤡".into();
         assert_eq!(
             state_for(&u, &[]),
@@ -230,5 +243,87 @@ mod tests {
             .map(|i| attachment(Some("image/jpeg"), 1, &i.to_string()))
             .collect();
         assert_eq!(image_urls(&m).len(), MAX_IMAGES);
+    }
+}
+
+/// Live check of where the not-nice line falls, at the default threshold (sends synthetic text
+/// only): `./dev.sh cargo test live_boundary -- --ignored --nocapture` with JEV_API_KEY in `.env`.
+#[cfg(test)]
+mod live {
+    use super::*;
+    use crate::db::DEFAULT_THRESHOLD;
+    use crate::hostility::{Line, NO, YES, is_hostile, question, utterance};
+    use chrono::{TimeDelta, Utc};
+
+    /// Sam says `said` now, after `before`: (who, what, how many seconds ago).
+    fn sam_says(source: Source, before: &[(&str, &str, i64)], said: &str) -> Utterance {
+        let mut u = utterance(source, said);
+        u.at = Utc::now();
+        u.in_call = vec!["Sam".into(), "Alex".into(), "Jo".into()];
+        u.recent = before
+            .iter()
+            .map(|&(speaker, said, ago)| Line {
+                speaker: speaker.into(),
+                said: said.into(),
+                at: u.at - TimeDelta::seconds(ago),
+            })
+            .collect();
+        u
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_boundary() {
+        use Source::{Message, Voice};
+        let jev = jev::Jev::new(std::env::var("JEV_API_KEY").expect("JEV_API_KEY"));
+        let drawing = (
+            "Alex",
+            "finally finished my first drawing, what do you think?",
+            15,
+        );
+        let bot_word = (
+            "Alex",
+            "what does the bot call you when it catches you?",
+            10,
+        );
+        let map = [
+            ("Alex", "here's my drawing btw", 1200),
+            ("Jo", "anyone tried the new map yet?", 40),
+            ("Jo", "I think it's really badly designed", 20),
+        ];
+        let cliff = (
+            "Jo",
+            "what if we all just jump off the cliff, it's quicker",
+            6,
+        );
+        let carried = [("Alex", "I carried that round", 4)];
+        let cases: [(Source, &[_], &str, bool); 14] = [
+            (Message, &[], "hostile", false),
+            (Message, &[], "toxic", false),
+            (Message, &[], "not nice", false),
+            (Message, &[], "this bot is broken lol", false),
+            (Message, &[], "gg, well played", false),
+            (Message, &[], "lmao your aim is trash", true),
+            (Message, &[], "nobody asked you", true),
+            (Message, &[cliff], "oh wow, what a genius idea", true),
+            (Message, &[bot_word], "hostile", false),
+            (Message, &[drawing], "cringe", true),
+            (Message, &[drawing], "wow, I love the colours", false),
+            (Message, &map, "yeah it's trash", false),
+            (Voice, &carried, "shut up, you were useless", true),
+            (Voice, &carried, "hostile", false),
+        ];
+        let mut wrong = Vec::new();
+        for (source, before, said, not_nice) in cases {
+            let u = sam_says(source, before, said);
+            let q = noul(question(source), Some((YES, NO)));
+            let a = jev.ask(state_for(&u, &[]), [("q", q)], vec![]);
+            let score = a.await.unwrap().noul("q").unwrap();
+            println!("{score:.2} {said} (after {} lines)", before.len());
+            if is_hostile(score, DEFAULT_THRESHOLD) != not_nice {
+                wrong.push(said);
+            }
+        }
+        assert!(wrong.is_empty(), "misjudged: {wrong:?}");
     }
 }
