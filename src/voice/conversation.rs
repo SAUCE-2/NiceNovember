@@ -2,34 +2,29 @@
 //! "shut up" answering a joke reads differently from "shut up" out of nowhere. Pure.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+
+use chrono::TimeDelta;
 
 use crate::hostility::Line;
 
 /// Lines older than this aren't context any more.
-pub const WINDOW: Duration = Duration::from_secs(45);
+pub const WINDOW: TimeDelta = TimeDelta::seconds(45);
 /// At most this many lines of context.
 pub const MAX_LINES: usize = 8;
 
 #[derive(Default)]
 pub struct Conversation {
-    lines: VecDeque<(Instant, Line)>,
+    lines: VecDeque<Line>,
 }
 
 impl Conversation {
-    /// What was said in the [`WINDOW`] before `now` (up to [`MAX_LINES`], oldest first), then
-    /// remember `line` as said at `now`.
-    pub fn next(&mut self, now: Instant, line: Line) -> Vec<Line> {
-        self.lines
-            .retain(|(at, _)| now.saturating_duration_since(*at) <= WINDOW);
+    /// What was said in the [`WINDOW`] before `line` (up to [`MAX_LINES`], oldest first), then
+    /// remember `line`.
+    pub fn next(&mut self, line: Line) -> Vec<Line> {
+        self.lines.retain(|l| line.at - l.at <= WINDOW);
         let skip = self.lines.len().saturating_sub(MAX_LINES);
-        let context = self
-            .lines
-            .iter()
-            .skip(skip)
-            .map(|(_, l)| l.clone())
-            .collect();
-        self.lines.push_back((now, line));
+        let context = self.lines.iter().skip(skip).cloned().collect();
+        self.lines.push_back(line);
         while self.lines.len() > MAX_LINES {
             self.lines.pop_front();
         }
@@ -40,11 +35,13 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
 
-    fn line(said: &str) -> Line {
+    fn line(said: &str, at: DateTime<Utc>) -> Line {
         Line {
             speaker: "sam".into(),
             said: said.into(),
+            at,
         }
     }
 
@@ -55,17 +52,17 @@ mod tests {
     #[test]
     fn context_is_what_came_before() {
         let mut c = Conversation::default();
-        let t = Instant::now();
-        assert!(c.next(t, line("a")).is_empty());
-        assert_eq!(saids(&c.next(t, line("b"))), ["a"]);
+        let t = DateTime::UNIX_EPOCH;
+        assert!(c.next(line("a", t)).is_empty());
+        assert_eq!(saids(&c.next(line("b", t))), ["a"]);
         assert_eq!(
-            saids(&c.next(t + WINDOW, line("c"))),
+            saids(&c.next(line("c", t + WINDOW))),
             ["a", "b"],
             "window is inclusive"
         );
-        let later = t + WINDOW + Duration::from_secs(1);
+        let later = t + WINDOW + TimeDelta::seconds(1);
         assert_eq!(
-            saids(&c.next(later, line("d"))),
+            saids(&c.next(line("d", later))),
             ["c"],
             "a and b are too old"
         );
@@ -74,11 +71,11 @@ mod tests {
     #[test]
     fn keeps_only_the_latest_lines() {
         let mut c = Conversation::default();
-        let t = Instant::now();
+        let t = DateTime::UNIX_EPOCH;
         for i in 0..20 {
-            c.next(t, line(&i.to_string()));
+            c.next(line(&i.to_string(), t));
         }
-        let context = c.next(t, line("x"));
+        let context = c.next(line("x", t));
         assert_eq!(context.len(), MAX_LINES);
         assert_eq!(context.first().unwrap().said, "12");
         assert_eq!(context.last().unwrap().said, "19");

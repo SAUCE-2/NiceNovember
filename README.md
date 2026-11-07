@@ -18,9 +18,11 @@ Everything that happens is logged, so you can build stats from it at the end of 
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
   leaves when it's empty), and transcribes each thing a participant says locally with
   [Whisper](https://github.com/ggerganov/whisper.cpp).
-- **Judged in context.** Each line is judged with who said it, who's in the call, and the last few
-  lines of the conversation (up to 8, from the last 45 seconds), so "shut up" answering a joke
-  reads differently from "shut up" aimed at someone.
+- **Judged in context.** Each message or line is judged with who said it and when, and the
+  conversation just before it with who said each thing and when: in chat up to 10 messages from
+  the 30 minutes before, in voice who's in the call and up to 8 lines from the last 45 seconds.
+  So "cringe" right after someone shares their drawing is not nice, but just saying "hostile"
+  (or answering "what does the bot call you?") isn't.
 - **Public call-outs.** Each hostile message or sentence is posted to the announce channel as a
   quote, with who said it, where, and how sure Jev is that it was hostile.
 - **Timeouts for everyone.** Enforced by the bot, not Discord's timeout: until the timeout ends,
@@ -34,7 +36,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Step | Chat | Voice |
 |---|---|---|
 | Who | Participants only (the participant role) | Participants in the monitored channel |
-| What's judged | Every new message (with the message it replies to), edits that change the text, and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
+| What's judged | Every new message (with the recent conversation in the channel and the message it replies to), edits that change the text (with the conversation before the message), and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
 | Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
 | Then | 10s timeout, quote in the announce channel with Jev's score (e.g. `87% hostile`) | Same, and server-muted and deafened until it ends |
 
@@ -202,7 +204,7 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `typing`, `command`, `thread_create` | Who typed where, which slash command was used, new threads |
 | `member_seen` / `member_join` / `member_leave` / `member_update` | Names, nick and roles (snapshot at startup, then changes) |
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
-| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, and for voice `context_lines` and `in_call` |
+| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, `context_lines` (how much of the conversation it was judged with), and for voice `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
 | `hostile` | Something hostile: what was `said`, `score`, `muted` (server-muted and deafened), `announced` |
 | `timed_out` / `timeout_released` | Each timeout: `secs`, `until`, `muted`; and when it was lifted |

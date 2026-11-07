@@ -2,13 +2,14 @@
 //! edits and reactions are judged, and the voice monitor is kept in its channel.
 
 use anyhow::Result;
+use chrono::TimeDelta;
 use poise::serenity_prelude::{
-    self as serenity, FullEvent, GuildId, Message, MessageUpdateEvent, Reaction, ReactionType,
-    VoiceState,
+    self as serenity, ChannelId, FullEvent, GetMessages, GuildId, Message, MessageId,
+    MessageUpdateEvent, Reaction, ReactionType, VoiceState,
 };
 
 use crate::app::Data;
-use crate::hostility::{Source, Utterance};
+use crate::hostility::{Line, Source, Utterance};
 use crate::participant::is_participant;
 use crate::voice::monitor;
 use crate::{judge, setup, stats, timeout};
@@ -65,12 +66,48 @@ async fn on_message(ctx: &serenity::Context, data: &Data, msg: &Message) -> Resu
         user: msg.author.id,
         channel: msg.channel_id,
         source: Source::Message,
+        author: msg.author.display_name().to_owned(),
         said: msg.content.clone(),
+        at: *msg.timestamp,
         message: Some(msg.id),
         in_reply_to: msg.referenced_message.as_ref().map(|r| r.content.clone()),
-        call: None,
+        recent: chat_before(ctx, msg.channel_id, msg.id).await,
+        in_call: vec![],
     };
     judge::judge(ctx, data, guild_id, u, images).await
+}
+
+/// Chat older than this before a message isn't its conversation any more.
+const CHAT_WINDOW: TimeDelta = TimeDelta::minutes(30);
+/// At most this many messages of chat context.
+const CHAT_LINES: u8 = 10;
+
+/// The conversation before `message` in `channel`. Empty if Discord won't say (logged).
+async fn chat_before(ctx: &serenity::Context, channel: ChannelId, message: MessageId) -> Vec<Line> {
+    let latest = GetMessages::new().before(message).limit(CHAT_LINES);
+    match channel.messages(ctx, latest).await {
+        Ok(msgs) => chat_lines(&msgs, message),
+        Err(e) => {
+            tracing::debug!(%channel, "no chat context: {e}");
+            vec![]
+        }
+    }
+}
+
+/// Messages (newest first, as Discord gives them) sent in the [`CHAT_WINDOW`] before `message`,
+/// oldest first. Ones with no text are left out.
+pub fn chat_lines(newest_first: &[Message], message: MessageId) -> Vec<Line> {
+    let sent = *message.created_at();
+    newest_first
+        .iter()
+        .rev()
+        .filter(|m| !m.content.trim().is_empty() && sent - *m.timestamp <= CHAT_WINDOW)
+        .map(|m| Line {
+            speaker: m.author.display_name().to_owned(),
+            said: m.content.clone(),
+            at: *m.timestamp,
+        })
+        .collect()
 }
 
 /// The new text of a real edit: not an embed unfurl, and not the same text again.
@@ -100,10 +137,13 @@ async fn on_edit(
         user: author.id,
         channel: e.channel_id,
         source: Source::Edit,
+        author: author.display_name().to_owned(),
         said: text.to_owned(),
+        at: e.edited_timestamp.map_or_else(chrono::Utc::now, |t| *t),
         message: Some(e.id),
         in_reply_to: None,
-        call: None,
+        recent: chat_before(ctx, e.channel_id, e.id).await,
+        in_call: vec![],
     };
     judge::judge(ctx, data, guild_id, u, vec![]).await
 }
@@ -136,10 +176,16 @@ async fn on_reaction(ctx: &serenity::Context, data: &Data, r: &Reaction) -> Resu
         user,
         channel: r.channel_id,
         source: Source::Reaction,
+        author: r
+            .member
+            .as_ref()
+            .map_or_else(|| user.to_string(), |m| m.display_name().into()),
         said: emoji_text(&r.emoji),
+        at: chrono::Utc::now(),
         message: Some(r.message_id),
         in_reply_to: Some(on.content),
-        call: None,
+        recent: vec![],
+        in_call: vec![],
     };
     judge::judge(ctx, data, guild_id, u, images).await
 }
@@ -191,6 +237,39 @@ mod tests {
             v["edited_timestamp"] = json!("2026-11-06T10:00:00Z");
         }
         serde_json::from_value(v).unwrap()
+    }
+
+    fn sent(secs: i64, name: &str, content: &str) -> Message {
+        let mut m = Message::default();
+        m.timestamp = serenity::Timestamp::from_unix_timestamp(secs).unwrap();
+        m.author.name = name.into();
+        m.content = content.into();
+        m
+    }
+
+    #[test]
+    fn chat_context_is_the_recent_conversation_oldest_first() {
+        let discord_epoch_ms = 1_420_070_400_000;
+        let now = 1_800_000_000;
+        let message = MessageId::new(((now * 1000 - discord_epoch_ms) as u64) << 22);
+        let newest_first = [
+            sent(now - 5, "alex", "check out my drawing"),
+            sent(now - 6, "alex", ""),
+            sent(now - 30 * 60, "jo", "hi all"),
+            sent(now - 30 * 60 - 1, "jo", "too old"),
+        ];
+        let lines = chat_lines(&newest_first, message);
+        let shown: Vec<_> = lines
+            .iter()
+            .map(|l| (l.speaker.as_str(), l.said.as_str(), l.at.timestamp()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("jo", "hi all", now - 30 * 60),
+                ("alex", "check out my drawing", now - 5)
+            ]
+        );
     }
 
     #[test]

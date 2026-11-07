@@ -1,8 +1,9 @@
 //! What counts as not nice ("hostile" in the code and the activity log), and how it's
 //! reported. Pure: no Discord or network calls.
 
+use chrono::{DateTime, Utc};
 use poise::serenity_prelude::{ChannelId, MessageId, UserId};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 /// Where an utterance came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -18,21 +19,20 @@ pub enum Source {
     Reaction,
 }
 
-/// One thing said in the voice call.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+/// How times are shown to Jev.
+pub const STAMP: &str = "%Y-%m-%d %H:%M:%S UTC";
+
+fn stamp<S: Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_str(&at.format(STAMP))
+}
+
+/// One thing said in a channel or the voice call, by display name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Line {
     pub speaker: String,
     pub said: String,
-}
-
-/// The voice call around something said: who said it, who's there, and what came just before.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Call {
-    pub speaker: String,
-    /// Display names of everyone in the call (bots excluded), speaker included.
-    pub in_call: Vec<String>,
-    /// What participants said just before, oldest first.
-    pub recent: Vec<Line>,
+    #[serde(serialize_with = "stamp")]
+    pub at: DateTime<Utc>,
 }
 
 /// Something a participant said, ready to judge.
@@ -41,41 +41,58 @@ pub struct Utterance {
     pub user: UserId,
     pub channel: ChannelId,
     pub source: Source,
+    /// Their display name.
+    pub author: String,
     pub said: String,
+    pub at: DateTime<Utc>,
     /// The chat message, for text; for a reaction, the message reacted to.
     pub message: Option<MessageId>,
     /// What the message replies to (or the reaction is on), as context for the judge.
     pub in_reply_to: Option<String>,
-    /// For voice: the call it was said in.
-    pub call: Option<Call>,
+    /// The conversation: what was said just before in the same channel or call, oldest first.
+    pub recent: Vec<Line>,
+    /// For voice: display names of everyone in the call (bots excluded), speaker included.
+    pub in_call: Vec<String>,
 }
 
-// Jev answers one condition per Noul best, so each question only asks "is it not nice?" and the
-// criteria carry the boundary, with examples on both sides.
+// Jev answers one condition per Noul best, so each question only asks "are they being not nice to
+// or about someone?" and the criteria carry the boundary, with examples on both sides. Keep the
+// "someone": without it, a word that only names meanness, like "hostile", counts as not nice.
 const TEXT_QUESTION: &str = "The state is a Discord chat message (`message_text`, possibly with \
-    attached images and the message it replies to) from a member of a community server where \
-    everyone has agreed to be nice all month. Does `message_text` say anything not nice?";
+    attached images and the message it replies to) that `author` sent at `sent_at`, on a \
+    community server where everyone has agreed to be nice all month. `recent_messages` is what \
+    was said in the channel just before, oldest first, with who said each and when. Use that \
+    conversation and its timing to work out who or what `message_text` is about and what \
+    `author` means by it. Is `author` being not nice to or about someone in `message_text`?";
 const VOICE_QUESTION: &str = "The state is a moment in a Discord voice call on a community server \
-    where everyone has agreed to be nice all month. `speaker` just said `said_now`. \
+    where everyone has agreed to be nice all month. `speaker` said `said_now` at `said_at`. \
     `people_in_call` is who's there, and `recent_conversation` is what some of them said just \
-    before (it may be missing lines). Everything is speech-to-text and may contain mishearings. \
-    Did `speaker` say anything not nice in `said_now`?";
+    before, oldest first, with when (it may be missing lines). Everything is speech-to-text and \
+    may contain mishearings. Use that conversation and its timing to work out who or what \
+    `said_now` is about and what `speaker` means by it. Is `speaker` being not nice to or about \
+    someone in `said_now`?";
 const REACTION_QUESTION: &str = "The state is an emoji `reaction` that a member of a community \
     server where everyone has agreed to be nice all month put on someone else's Discord message \
     (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`. Is \
-    this reaction not nice?";
-pub const YES: &str = "Not nice, even if it's mild, a joke, between friends, or about someone \
-    who isn't there: insults, name-calling, slurs, mocking, teasing, roasting or trash talk, \
-    sarcasm, passive aggression, backhanded compliments, putting down someone's looks, skills, \
-    work, taste or ideas, telling someone to shut up or go away, rudely dismissing them \
-    (\"nobody asked\", \"who cares\", \"ok and?\"), threats, wishing harm, or contempt for a \
-    person or group. Examples: \"you're so bad at this lol\", \"imagine being that dumb\", \
-    \"wow, great job, genius\", \"nobody cares\", \"ok boomer\", \"Sam's cooking is disgusting\"";
-pub const NO: &str = "Nice or neutral: friendly or kind talk, compliments, encouragement, \
-    respectful disagreement, frustration at a thing rather than a person (\"this game is \
-    shit\", \"ugh, lag again\"), self-deprecation, or quoting someone else's mean words without \
-    joining in. Examples: \"gg, well played\", \"I think you're wrong about that, here's why\", \
-    \"I'm so bad at this\", \"this boss is bullshit\"";
+    this reaction not nice to or about someone?";
+pub const YES: &str = "Not nice to or about a person or group (whoever it's said to, someone \
+    else in the server, or someone who isn't there), even if it's mild, a joke or between \
+    friends: insults, name-calling, slurs, mocking, teasing, roasting or trash talk, sarcasm, \
+    passive aggression, backhanded compliments, putting down someone's looks, skills, work, taste \
+    or ideas, telling someone to shut up or go away, rudely dismissing them (\"nobody asked\", \
+    \"who cares\", \"ok and?\"), threats, wishing harm, or contempt for a person or group. The \
+    conversation can aim a short reply at someone: \"cringe\" or \"trash\" right after someone \
+    shares their drawing puts it down. Examples: \"you're so bad at this lol\", \"imagine being \
+    that dumb\", \"wow, great job, genius\", \"nobody cares\", \"ok boomer\", \"Sam's cooking is \
+    disgusting\"";
+pub const NO: &str = "Not aimed at any person or group: friendly or kind talk, compliments, \
+    encouragement, respectful disagreement, frustration at a thing rather than a person (\"this \
+    game is shit\", \"ugh, lag again\"), self-deprecation, quoting someone else's mean words \
+    without joining in, or a word or remark that only names, asks about or discusses meanness, \
+    insults, the rules or this bot. A bare word like \"hostile\", \"toxic\", \"rude\" or \"not \
+    nice\" is this unless the conversation clearly aims it at someone. Examples: \"gg, well \
+    played\", \"I think you're wrong about that, here's why\", \"I'm so bad at this\", \"this \
+    boss is bullshit\", \"hostile\", \"that's rude\", \"be nice\", \"does swearing count?\"";
 
 pub fn question(source: Source) -> &'static str {
     match source {
@@ -156,19 +173,36 @@ pub fn clean_transcript(text: &str) -> String {
 }
 
 #[cfg(test)]
+pub fn utterance(source: Source, said: &str) -> Utterance {
+    Utterance {
+        user: UserId::new(7),
+        channel: ChannelId::new(9),
+        source,
+        author: "Sam".into(),
+        said: said.into(),
+        at: DateTime::UNIX_EPOCH,
+        message: None,
+        in_reply_to: None,
+        recent: vec![],
+        in_call: vec![],
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn utterance(source: Source, said: &str) -> Utterance {
-        Utterance {
-            user: UserId::new(7),
-            channel: ChannelId::new(9),
-            source,
-            said: said.into(),
-            message: None,
-            in_reply_to: None,
-            call: None,
-        }
+    #[test]
+    fn lines_show_when_they_were_said() {
+        let line = Line {
+            speaker: "Alex".into(),
+            said: "hi".into(),
+            at: "2026-11-07T14:58:03.5Z".parse().unwrap(),
+        };
+        assert_eq!(
+            serde_json::to_value(line).unwrap(),
+            serde_json::json!({ "speaker": "Alex", "said": "hi", "at": "2026-11-07 14:58:03 UTC" })
+        );
     }
 
     #[test]

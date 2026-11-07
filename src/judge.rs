@@ -58,8 +58,8 @@ pub async fn judge(
         "threshold": threshold,
         "jev_ms": jev_ms,
         "images": n_images,
-        "context_lines": u.call.as_ref().map(|c| c.recent.len()),
-        "in_call": u.call.as_ref().map(|c| c.in_call.len()),
+        "context_lines": u.recent.len(),
+        "in_call": (u.source == hostility::Source::Voice).then_some(u.in_call.len()),
         "shadow": gcfg.shadow,
     });
     stats::record(data, guild_id, log(kind::JUDGED, judged)).await;
