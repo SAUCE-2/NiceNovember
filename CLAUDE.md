@@ -35,8 +35,10 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
   someone else's message) or out loud in the monitored voice channel (a transcribed speech segment).
 - **Hostile** (in the code; "not nice" to users): Jev scored the utterance at or above the guild's
   threshold for being not nice to someone.
+- **Conversation**: what was said just before an utterance in the same chat channel or voice call,
+  each line with who said it and when. Messages, edits and voice lines are judged with it.
 - **Call**: the voice moment an utterance was said in: the speaker, who's in the channel, and the
-  last few lines said (the **conversation**).
+  conversation.
 - **Timeout**: the bot's own enforcement, never Discord's native timeout: until it ends, the
  participant's messages are deleted, their reactions removed, and they're server-muted and
  deafened in VC. It works the same on everyone, the owner and admins included.
