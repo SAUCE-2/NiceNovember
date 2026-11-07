@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use poise::serenity_prelude::{ChannelId, MessageId, UserId};
 use serde::{Serialize, Serializer};
 
+use crate::ai::jev::{Question, noul};
+
 /// Where an utterance came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -55,55 +57,91 @@ pub struct Utterance {
     pub in_call: Vec<String>,
 }
 
-// Jev answers one condition per Noul best, so each question only asks "are they being not nice to
-// or about someone?" and the criteria carry the boundary, with examples on both sides. Keep the
-// "someone": without it, a word that only names meanness, like "hostile", counts as not nice.
-const TEXT_QUESTION: &str = "The state is a Discord chat message (`message_text`, possibly with \
+// Jev answers one condition per Noul best, so "not nice" is two questions asked together: is it
+// aimed at someone, and is it a put-down. Words alone never decide it: a slur in a song title is a
+// put-down word but not aimed, and "stop gaslighting me" is aimed but not a put-down.
+const TEXT_SETTING: &str = "The state is a Discord chat message (`message_text`, possibly with \
     attached images and the message it replies to) that `author` sent at `sent_at`, on a \
     community server where everyone has agreed to be nice all month. `recent_messages` is what \
     was said in the channel just before, oldest first, with who said each and when. Use that \
     conversation and its timing to work out who or what `message_text` is about and what \
-    `author` means by it. Is `author` being not nice to or about someone in `message_text`?";
-const VOICE_QUESTION: &str = "The state is a moment in a Discord voice call on a community server \
+    `author` means by it.";
+const VOICE_SETTING: &str = "The state is a moment in a Discord voice call on a community server \
     where everyone has agreed to be nice all month. `speaker` said `said_now` at `said_at`. \
     `people_in_call` is who's there, and `recent_conversation` is what some of them said just \
     before, oldest first, with when (it may be missing lines). Everything is speech-to-text and \
     may contain mishearings. Use that conversation and its timing to work out who or what \
-    `said_now` is about and what `speaker` means by it. Is `speaker` being not nice to or about \
-    someone in `said_now`?";
-const REACTION_QUESTION: &str = "The state is an emoji `reaction` that a member of a community \
+    `said_now` is about and what `speaker` means by it.";
+const REACTION_SETTING: &str = "The state is an emoji `reaction` that a member of a community \
     server where everyone has agreed to be nice all month put on someone else's Discord message \
-    (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`. Is \
-    this reaction not nice to or about someone?";
-pub const YES: &str = "Not nice to or about a person or group (whoever it's said to, someone \
-    else in the server, or someone who isn't there), even if it's mild, a joke or between \
-    friends: insults, name-calling, slurs, mocking, teasing, roasting or trash talk, sarcasm, \
-    passive aggression, backhanded compliments, putting down someone's looks, skills, work, taste \
-    or ideas, telling someone to shut up or go away, rudely dismissing them (\"nobody asked\", \
-    \"who cares\", \"ok and?\"), threats, wishing harm, or contempt for a person or group. The \
-    conversation can aim a short reply at someone: \"cringe\" or \"trash\" right after someone \
-    shares their drawing puts it down. Examples: \"you're so bad at this lol\", \"imagine being \
-    that dumb\", \"wow, great job, genius\", \"nobody cares\", \"ok boomer\", \"Sam's cooking is \
-    disgusting\"";
-pub const NO: &str = "Not aimed at any person or group: friendly or kind talk, compliments, \
-    encouragement, respectful disagreement, frustration at a thing rather than a person (\"this \
-    game is shit\", \"ugh, lag again\"), self-deprecation, quoting someone else's mean words \
-    without joining in, or a word or remark that only names, asks about or discusses meanness, \
-    insults, the rules or this bot. A bare word like \"hostile\", \"toxic\", \"rude\" or \"not \
-    nice\" is this unless the conversation clearly aims it at someone. So is ordinary chat with \
-    no put-down in it: questions about what someone's doing, playful nicknames like \"twin\" or \
-    \"bro\", saying what happened, even a disagreement, and asking someone to stop doing \
-    something or saying how it makes you feel. Examples: \"gg, well played\", \"I think you're \
-    wrong about that, here's why\", \"I'm so bad at this\", \"this boss is bullshit\", \
-    \"hostile\", \"that's rude\", \"be nice\", \"does swearing count?\", \"why are you stalking \
-    me, twin?\", \"how are you making so much money?\", \"I've told him off\", \"stop gaslighting \
-    me\", \"please stop\", \"I don't appreciate your tone\"";
+    (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`.";
 
-pub fn question(source: Source) -> &'static str {
-    match source {
-        Source::Message | Source::Edit => TEXT_QUESTION,
-        Source::Voice => VOICE_QUESTION,
-        Source::Reaction => REACTION_QUESTION,
+/// Jev's answer to "is it aimed at someone?"; see [`questions`].
+pub const AIMED: &str = "aimed";
+/// Jev's answer to "is it a put-down?"; see [`questions`].
+pub const PUT_DOWN: &str = "put_down";
+
+const AIMED_YES: &str = "Aimed at or about a person or group: whoever it's said to, someone \
+    else in the server, someone who isn't there, or a group of people, or their looks, skills, \
+    work, taste or ideas. Using an identity or a slur as the insult is aimed at the people it \
+    names, even when it's said about a thing: \"that's so gay\" about a game is aimed at gay \
+    people. The conversation can aim a short reply: \"cringe\" right after someone shares their \
+    drawing is about their drawing. Examples: \"you're so bad at this\", \"Sam's cooking is \
+    disgusting\", \"this map is retarded\", \"why are you stalking me, twin?\"";
+const AIMED_NO: &str = "Not aimed at anyone: about a thing, a game, the situation or the speaker \
+    themselves, or a word that's mentioned rather than used on someone. Naming an artist, song, \
+    game or username, quoting a lyric, repeating someone else's words without joining in, or \
+    naming or asking about meanness, the rules or this bot are all mentions, even when what's \
+    mentioned has a swear word or slur in it. Examples: \"this boss is bullshit\", \"ugh, lag \
+    again\", \"I'm so bad at this\", \"my favourite song is Fuck You by CeeLo Green\", \
+    \"hostile\", \"does swearing count?\"";
+const PUT_DOWN_YES: &str = "A put-down, even if it's mild, a joke or between friends: insults, \
+    name-calling, slurs, mocking, teasing, roasting or trash talk, sarcasm, passive aggression, \
+    backhanded compliments, rudely dismissing (\"nobody asked\", \"who cares\", \"ok and?\"), \
+    telling someone to shut up or go away, threats, wishing harm, or contempt. Examples: \
+    \"lmao your aim is trash\", \"imagine being that dumb\", \"wow, great job, genius\", \
+    \"ok boomer\", \"cringe\", \"I'm not as nasty as you\"";
+const PUT_DOWN_NO: &str = "Not a put-down: friendly, kind or neutral talk, compliments, \
+    encouragement, questions, playful nicknames like \"twin\" or \"bro\", respectful \
+    disagreement, saying what happened, asking someone to stop something or saying how it makes \
+    you feel. Examples: \"gg, well played\", \"I think you're wrong about that, here's why\", \
+    \"how are you making so much money?\", \"I've told him off\", \"stop gaslighting me\", \
+    \"please stop\", \"I don't appreciate your tone\"";
+
+/// The [`AIMED`] and [`PUT_DOWN`] questions for an utterance from `source`, to ask in one call.
+pub fn questions(source: Source) -> [(&'static str, Question); 2] {
+    let (setting, it) = match source {
+        Source::Message | Source::Edit => (TEXT_SETTING, "what `author` says in `message_text`"),
+        Source::Voice => (VOICE_SETTING, "what `speaker` says in `said_now`"),
+        Source::Reaction => (REACTION_SETTING, "this `reaction`"),
+    };
+    let ask = |q: &str, criteria| noul(format!("{setting} {q}"), Some(criteria));
+    [
+        (
+            AIMED,
+            ask(
+                &format!("Is {it} aimed at or about a particular person or group?"),
+                (AIMED_YES, AIMED_NO),
+            ),
+        ),
+        (
+            PUT_DOWN,
+            ask(&format!("Is {it} a put-down?"), (PUT_DOWN_YES, PUT_DOWN_NO)),
+        ),
+    ]
+}
+
+/// Jev's answers to [`questions`] about one utterance.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Verdict {
+    pub aimed: f32,
+    pub put_down: f32,
+}
+
+impl Verdict {
+    /// How not nice it is: only as sure as Jev is of both, so either one being low clears it.
+    pub fn score(self) -> f32 {
+        self.aimed.min(self.put_down)
     }
 }
 
@@ -226,6 +264,7 @@ pub fn utterance(source: Source, said: &str) -> Utterance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn lines_show_when_they_were_said() {
@@ -248,11 +287,32 @@ mod tests {
     }
 
     #[test]
-    fn questions_match_the_source() {
-        assert_eq!(question(Source::Message), TEXT_QUESTION);
-        assert_eq!(question(Source::Edit), TEXT_QUESTION);
-        assert_eq!(question(Source::Voice), VOICE_QUESTION);
-        assert_eq!(question(Source::Reaction), REACTION_QUESTION);
+    fn not_nice_needs_both_aimed_and_a_put_down() {
+        let score = |aimed, put_down| Verdict { aimed, put_down }.score();
+        assert_eq!(score(0.1, 0.95), 0.1);
+        assert_eq!(score(0.95, 0.2), 0.2);
+        assert_eq!(score(0.9, 0.8), 0.8);
+    }
+
+    #[test]
+    fn asks_both_questions_about_what_the_source_said() {
+        let asked = |source| {
+            let qs = serde_json::to_value(BTreeMap::from(questions(source))).unwrap();
+            let instructions = |id: &str| qs[id]["instructions"].as_str().unwrap().to_owned();
+            assert!(qs[AIMED]["criteria"]["true"].is_string());
+            assert!(qs[PUT_DOWN]["criteria"]["false"].is_string());
+            [instructions(AIMED), instructions(PUT_DOWN)]
+        };
+        for q in asked(Source::Message) {
+            assert!(q.contains("`message_text`"), "{q}");
+        }
+        assert_eq!(asked(Source::Edit), asked(Source::Message));
+        for q in asked(Source::Voice) {
+            assert!(q.contains("`said_now`"), "{q}");
+        }
+        for q in asked(Source::Reaction) {
+            assert!(q.contains("`reaction`"), "{q}");
+        }
     }
 
     #[test]

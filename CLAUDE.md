@@ -33,8 +33,12 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
   and timed out.
 - **Utterance**: something a participant said, in chat (a message, an edit, or an emoji reaction on
   someone else's message) or out loud in the monitored voice channel (a transcribed speech segment).
-- **Hostile** (in the code; "not nice" to users): Jev scored the utterance at or above the guild's
-  threshold for being not nice to someone.
+- **Hostile** (in the code; "not nice" to users): the verdict's score is at or above the guild's
+  threshold.
+- **Verdict**: Jev's two answers about an utterance, asked together: **aimed** (is it at or about
+  a person or group, rather than a thing, nobody, or a word just mentioned) and **put-down** (is
+  it an insult, mockery, sarcasm, dismissal or the like, even as a joke). Its score is the lower
+  of the two, so it's only not nice when it's both.
 - **Conversation**: what was said just before an utterance in the same chat channel or voice call,
   each line with who said it and when. Messages, edits and voice lines are judged with it.
 - **Call**: the voice moment an utterance was said in: the speaker, who's in the channel, and the
