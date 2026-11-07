@@ -39,7 +39,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Who | Participants only (the participant role) | Participants in the monitored channel |
 | What's judged | Every new message (with the recent conversation in the channel and the message it replies to), edits that change the text (with the conversation before the message), and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
 | Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
-| Then | 10s timeout, quote in the announce channel with Jev's score (e.g. `87% hostile`) | Same, and server-muted and deafened until it ends |
+| Then | 10s timeout, quote in the announce channel with how sure Jev is that it was hostile (e.g. `87% sure it's hostile`, a likelihood, not how hostile it was) | Same, and server-muted and deafened until it ends |
 
 **Why not Discord's timeout?** Discord won't let a bot time out the server owner, anyone with
 Administrator, or anyone above the bot's role, so the bot does it itself, the same for everyone: it
@@ -171,8 +171,8 @@ or kicked out while people are there, it comes back within 30 seconds.
 
 To find the right threshold on real conversation before anyone gets timed out, turn on shadow mode:
 `/nice setup shadow:true`. Everything is judged, logged and quoted in the announce channel as usual,
-but nobody is timed out, and the call-out says `👻 Not nice (74% hostile, shadow mode: not timed
-out)`. Too many false alarms? Raise the bar with `/nice setup threshold:0.8`. Letting too much
+but nobody is timed out, and the call-out says `👻 Not nice (74% sure it's hostile, shadow mode:
+not timed out)`. Too many false alarms? Raise the bar with `/nice setup threshold:0.8`. Letting too much
 through? Lower it. Turn it off with `/nice setup shadow:false`.
 
 ### Configuration
