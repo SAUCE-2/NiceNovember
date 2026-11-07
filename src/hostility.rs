@@ -90,9 +90,13 @@ pub const NO: &str = "Not aimed at any person or group: friendly or kind talk, c
     game is shit\", \"ugh, lag again\"), self-deprecation, quoting someone else's mean words \
     without joining in, or a word or remark that only names, asks about or discusses meanness, \
     insults, the rules or this bot. A bare word like \"hostile\", \"toxic\", \"rude\" or \"not \
-    nice\" is this unless the conversation clearly aims it at someone. Examples: \"gg, well \
+    nice\" is this unless the conversation clearly aims it at someone. So is ordinary chat with \
+    no put-down in it: questions about what someone's doing, playful banter and nicknames like \
+    \"twin\" or \"bro\", and saying what happened, even a disagreement. Examples: \"gg, well \
     played\", \"I think you're wrong about that, here's why\", \"I'm so bad at this\", \"this \
-    boss is bullshit\", \"hostile\", \"that's rude\", \"be nice\", \"does swearing count?\"";
+    boss is bullshit\", \"hostile\", \"that's rude\", \"be nice\", \"does swearing count?\", \
+    \"why are you stalking me, twin?\", \"how are you making so much money?\", \"I've told him \
+    off\"";
 
 pub fn question(source: Source) -> &'static str {
     match source {
