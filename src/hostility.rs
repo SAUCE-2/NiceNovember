@@ -111,16 +111,28 @@ pub fn is_hostile(score: f32, threshold: f32) -> bool {
     score >= threshold
 }
 
-/// Longest quote posted, in characters; longer ones are cut with an ellipsis.
-const MAX_QUOTE: usize = 1500;
+/// Longest quote posted, in characters; longer ones are cut with an ellipsis. With
+/// [`QUOTE_CONTEXT`] lines of [`MAX_CONTEXT_LINE`], a call-out stays under Discord's 2000.
+const MAX_QUOTE: usize = 1300;
+/// How many lines of the call a voice call-out shows before what was said. Chat call-outs show
+/// none, since anyone can scroll up the channel.
+const QUOTE_CONTEXT: usize = 3;
+/// Longest context line shown, in characters.
+const MAX_CONTEXT_LINE: usize = 150;
+
+/// `text` trimmed and cut to `max` characters, with an ellipsis if it was longer.
+fn cut(text: &str, max: usize) -> String {
+    let text = text.trim();
+    let mut out: String = text.chars().take(max).collect();
+    if text.chars().count() > max {
+        out.push('…');
+    }
+    out
+}
 
 /// `said` as a Discord block quote, cut to [`MAX_QUOTE`].
-pub fn quote(said: &str) -> String {
-    let said = said.trim();
-    let mut text: String = said.chars().take(MAX_QUOTE).collect();
-    if said.chars().count() > MAX_QUOTE {
-        text.push('…');
-    }
+fn quote(said: &str) -> String {
+    let text = cut(said, MAX_QUOTE);
     if text.is_empty() {
         return "> …".into();
     }
@@ -130,19 +142,36 @@ pub fn quote(said: &str) -> String {
         .join("\n")
 }
 
+/// The last [`QUOTE_CONTEXT`] lines of a voice call, then what `u` said in bold. Transcripts
+/// are single lines (see [`clean_transcript`]).
+fn quote_in_context(u: &Utterance) -> String {
+    let skip = u.recent.len().saturating_sub(QUOTE_CONTEXT);
+    let before = u.recent[skip..]
+        .iter()
+        .map(|l| format!("> {}: {}", l.speaker, cut(&l.said, MAX_CONTEXT_LINE)));
+    let said = cut(&u.said, MAX_QUOTE);
+    let said = if said.is_empty() {
+        "…".into()
+    } else {
+        format!("**{said}**")
+    };
+    let own = format!("> {}: {said}", u.author);
+    before.chain([own]).collect::<Vec<_>>().join("\n")
+}
+
 /// The public call-out posted to the announce channel, with Jev's score as a percentage. In
 /// shadow mode it says nobody was timed out.
 pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     let (did, quoted) = match u.source {
-        Source::Voice => (format!("said in 🔊 <#{}>", u.channel), u.said.as_str()),
-        Source::Message => (format!("said in <#{}>", u.channel), u.said.as_str()),
+        Source::Voice => (format!("said in 🔊 <#{}>", u.channel), quote_in_context(u)),
+        Source::Message => (format!("said in <#{}>", u.channel), quote(&u.said)),
         Source::Edit => (
             format!("said in an edit in <#{}>", u.channel),
-            u.said.as_str(),
+            quote(&u.said),
         ),
         Source::Reaction => (
             format!("reacted {} in <#{}> to", u.said, u.channel),
-            u.in_reply_to.as_deref().unwrap_or_default(),
+            quote(u.in_reply_to.as_deref().unwrap_or_default()),
         ),
     };
     let percent = format!("{:.0}% hostile", score * 100.0);
@@ -151,7 +180,7 @@ pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     } else {
         format!("🚫 **Not nice!** ({percent})")
     };
-    format!("{verdict} <@{}> {did}:\n{}", u.user, quote(quoted))
+    format!("{verdict} <@{}> {did}:\n{quoted}", u.user)
 }
 
 /// Whisper's non-speech markers like `[BLANK_AUDIO]`, `(music)` or `*coughs*`, and leftover
@@ -240,7 +269,7 @@ mod tests {
     fn announcements_say_where() {
         assert_eq!(
             announcement(&utterance(Source::Voice, "shut up"), 0.874, false),
-            "🚫 **Not nice!** (87% hostile) <@7> said in 🔊 <#9>:\n> shut up"
+            "🚫 **Not nice!** (87% hostile) <@7> said in 🔊 <#9>:\n> Sam: **shut up**"
         );
         let say = |source| announcement(&utterance(source, "x"), 0.7, false);
         assert!(say(Source::Message).contains("said in <#9>:"));
@@ -260,6 +289,31 @@ mod tests {
             "👻 **Not nice** (72% hostile, shadow mode: not timed out) <@7> said in <#9>:\n\
              > you suck"
         );
+    }
+
+    #[test]
+    fn quotes_the_conversation_before_and_bolds_what_was_said() {
+        let line = |speaker: &str, said: &str| Line {
+            speaker: speaker.into(),
+            said: said.into(),
+            at: DateTime::UNIX_EPOCH,
+        };
+        let mut u = utterance(Source::Voice, "stop gaslighting me");
+        u.recent = vec![
+            line("Jo", "too early"),
+            line("Alex", "I never said that"),
+            line("Jo", "he did say it"),
+            line("Alex", &"a".repeat(MAX_CONTEXT_LINE + 1)),
+        ];
+        let long = format!("{}…", "a".repeat(MAX_CONTEXT_LINE));
+        assert_eq!(
+            quote_in_context(&u),
+            format!(
+                "> Alex: I never said that\n> Jo: he did say it\n> Alex: {long}\n\
+                 > Sam: **stop gaslighting me**"
+            )
+        );
+        assert_eq!(quote_in_context(&utterance(Source::Voice, " ")), "> Sam: …");
     }
 
     #[test]

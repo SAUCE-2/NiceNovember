@@ -24,7 +24,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
   So "cringe" right after someone shares their drawing is not nice, but just saying "hostile"
   (or answering "what does the bot call you?") isn't.
 - **Public call-outs.** Each hostile message or sentence is posted to the announce channel as a
-  quote, with who said it, where, and how sure Jev is that it was hostile.
+  quote, with who said it, where, and how sure Jev is that it was hostile. Voice call-outs also
+  show the last few lines of the call before it, with what was said in bold.
 - **Timeouts for everyone.** Enforced by the bot, not Discord's timeout: until the timeout ends,
   the user's messages are deleted, their reactions are removed, and they're server-muted and
   deafened in VC.
