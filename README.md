@@ -15,7 +15,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
   reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
   Jev answers two questions in context: is it aimed at a person or group, and is it a put-down?
   It's only not nice when it's both. Swearing at a game, naming a song or artist with a slur in
-  it, quoting a lyric, or asking someone to stop something is fine. A put-down aimed at someone
+  it, quoting a lyric, asking someone to stop something, or calling out something crude they said
+  ("that's disgusting") is fine. A put-down aimed at someone
   isn't, even teasing, sarcasm or a joke between friends, and neither is using an identity as
   the insult ("that's so gay" about a game).
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and

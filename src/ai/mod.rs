@@ -338,7 +338,19 @@ mod live {
         ];
         let song = ("Alex", "what song is this?", 10);
         let update = ("Jo", "the new update removed ranked mode", 20);
-        let cases: [(Source, &[_], &str, bool); 23] = [
+        let desk = [
+            (
+                "Sam",
+                "So many fireworks, it's scary. I'm hiding under my desk.",
+                15,
+            ),
+            (
+                "Alex",
+                "Come hide under my desk and you can keep your mouth busy with my cock.",
+                8,
+            ),
+        ];
+        let cases: [(Source, &[_], &str, bool); 24] = [
             (Message, &[], "hostile", false),
             (Message, &[], "toxic", false),
             (Message, &[], "not nice", false),
@@ -385,6 +397,7 @@ mod live {
                 false,
             ),
             (Message, &[update], "that's so gay", true),
+            (Voice, &desk, "That's disgusting.", false),
         ];
         let mut wrong = Vec::new();
         for (source, before, said, not_nice) in cases {
