@@ -144,12 +144,18 @@ pub struct UserStats {
     pub reactions: i64,
     pub heard: i64,
     pub heard_audio_ms: i64,
-    pub judged: i64,
-    pub avg_score: Option<f64>,
-    pub hostile: i64,
     pub timed_out: i64,
     pub timeout_secs: i64,
     pub vc_secs: i64,
+}
+
+/// How one user's utterances from one source were judged, for `/stats`.
+#[derive(Clone, Debug, PartialEq, sqlx::FromRow)]
+pub struct SourceStats {
+    pub source: String,
+    pub judged: i64,
+    pub avg_score: Option<f64>,
+    pub hostile: i64,
 }
 
 /// One judged utterance, for Top Trumps highlights on the `/stats` card.
@@ -238,9 +244,6 @@ impl Db {
                 COALESCE(SUM(CASE WHEN kind = 'heard'
                     THEN CAST(json_extract(data, '$.audio_ms') AS INTEGER) ELSE 0 END), 0)
                     AS heard_audio_ms,
-                COALESCE(SUM(kind = 'judged'), 0) AS judged,
-                AVG(CASE WHEN kind = 'judged' THEN json_extract(data, '$.score') END) AS avg_score,
-                COALESCE(SUM(kind = 'hostile'), 0) AS hostile,
                 COALESCE(SUM(kind = 'timed_out'), 0) AS timed_out,
                 COALESCE(SUM(CASE WHEN kind = 'timed_out'
                     THEN CAST(json_extract(data, '$.secs') AS INTEGER) ELSE 0 END), 0)
@@ -253,6 +256,24 @@ impl Db {
         .bind(guild_id as i64)
         .bind(user_id as i64)
         .fetch_one(&self.0)
+        .await?)
+    }
+
+    /// Judged and hostile counts for one user, per utterance source, most judged first.
+    pub async fn user_sources(&self, guild_id: u64, user_id: u64) -> Result<Vec<SourceStats>> {
+        Ok(sqlx::query_as(
+            "SELECT
+                COALESCE(json_extract(data, '$.source'), '?') AS source,
+                SUM(kind = 'judged') AS judged,
+                AVG(CASE WHEN kind = 'judged' THEN json_extract(data, '$.score') END) AS avg_score,
+                SUM(kind = 'hostile') AS hostile
+             FROM activity_log
+             WHERE guild_id = ? AND user_id = ? AND kind IN ('judged', 'hostile')
+             GROUP BY 1 ORDER BY judged DESC, source",
+        )
+        .bind(guild_id as i64)
+        .bind(user_id as i64)
+        .fetch_all(&self.0)
         .await?)
     }
 
@@ -535,7 +556,7 @@ mod tests {
             .user(UserId::new(7)),
             Log::new(
                 kind::HOSTILE,
-                json!({"said": "you're the worst", "score": 0.9}),
+                json!({"said": "you're the worst", "score": 0.9, "source": "voice"}),
             )
             .user(UserId::new(7)),
             Log::new(kind::TIMED_OUT, json!({"secs": 60})).user(UserId::new(7)),
@@ -552,9 +573,6 @@ mod tests {
         assert_eq!(s.reactions, 1);
         assert_eq!(s.heard, 2);
         assert_eq!(s.heard_audio_ms, 2000);
-        assert_eq!(s.judged, 3);
-        assert!((s.avg_score.unwrap() - 0.5).abs() < 1e-9);
-        assert_eq!(s.hostile, 1);
         assert_eq!(s.timed_out, 2);
         assert_eq!(s.timeout_secs, 180);
         assert_eq!(s.vc_secs, 300);
@@ -568,6 +586,17 @@ mod tests {
         assert_eq!(friendliest.said, "have a nice day");
         assert!((friendliest.score - 0.1).abs() < 1e-9);
         assert!(db.user_highlights(1, 9).await.unwrap().meanest.is_none());
+
+        let by_source = db.user_sources(1, 7).await.unwrap();
+        let sources: Vec<_> = by_source.iter().map(|s| s.source.as_str()).collect();
+        assert_eq!(sources, ["message", "voice"], "most judged first");
+        let (message, voice) = (&by_source[0], &by_source[1]);
+        assert_eq!((message.judged, message.hostile), (2, 0));
+        assert!((message.avg_score.unwrap() - 0.3).abs() < 1e-9);
+        assert_eq!((voice.judged, voice.hostile), (1, 1));
+        assert!((voice.avg_score.unwrap() - 0.9).abs() < 1e-9);
+        assert_eq!(db.user_sources(1, 8).await.unwrap()[0].source, "?");
+        assert!(db.user_sources(1, 9).await.unwrap().is_empty());
     }
 
     #[test]

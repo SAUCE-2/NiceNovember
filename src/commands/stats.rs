@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::app::Ctx;
-use crate::stats::{self, KindCount, SaidHighlight, UserHighlights, UserStats};
+use crate::stats::{self, KindCount, SaidHighlight, SourceStats, UserHighlights, UserStats};
 use anyhow::{Context as _, Result, bail};
 use poise::CreateReply;
 use poise::serenity_prelude::{
@@ -25,11 +25,12 @@ pub async fn stats(
     let data = ctx.data();
     let uid = user.id.get();
     let s = data.db.user_stats(guild_id.get(), uid).await?;
+    let sources = data.db.user_sources(guild_id.get(), uid).await?;
     let highlights = data.db.user_highlights(guild_id.get(), uid).await?;
 
     let embed = CreateEmbed::new()
         .title(format!("🃏 {}", user.display_name()))
-        .description(format_user_card(&s, &highlights))
+        .description(format_user_card(&s, &sources, &highlights))
         .colour(0x3498db);
     // Channel-visible on purpose: this is the public call-out of how nice they've been.
     ctx.send(
@@ -145,7 +146,7 @@ fn format_kind_counts(counts: &[KindCount]) -> String {
     text
 }
 
-fn format_user_card(s: &UserStats, h: &UserHighlights) -> String {
+fn format_user_card(s: &UserStats, sources: &[SourceStats], h: &UserHighlights) -> String {
     let mut text = String::new();
     let _ = writeln!(
         text,
@@ -157,14 +158,22 @@ fn format_user_card(s: &UserStats, h: &UserHighlights) -> String {
         "**Friendliest thing:** {}",
         format_highlight(h.friendliest.as_ref())
     );
-    let avg = s
-        .avg_score
-        .map(|v| format!("{v:.2}"))
-        .unwrap_or_else(|| "—".into());
+    let none = if sources.is_empty() { " —" } else { "" };
+    let _ = writeln!(text, "**By source:**{none}");
+    for src in sources {
+        let avg = src
+            .avg_score
+            .map(|v| format!("{v:.2}"))
+            .unwrap_or_else(|| "—".into());
+        let _ = writeln!(
+            text,
+            "`{}` · avg {avg} · {} judged · {} hostile",
+            src.source, src.judged, src.hostile
+        );
+    }
     let _ = writeln!(
         text,
-        "**Hostility:** avg {avg} · {} hostile · {} timeouts ({})",
-        s.hostile,
+        "**Timeouts:** {} ({})",
         s.timed_out,
         fmt_secs(s.timeout_secs)
     );
@@ -214,7 +223,6 @@ fn fmt_ms(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stats::UserStats;
 
     #[test]
     fn kind_counts_text() {
@@ -256,10 +264,11 @@ mod tests {
 
     #[test]
     fn user_card_text() {
-        let empty = format_user_card(&UserStats::default(), &UserHighlights::default());
+        let empty = format_user_card(&UserStats::default(), &[], &UserHighlights::default());
         assert!(empty.contains("**Meanest thing:** —"));
         assert!(empty.contains("**Friendliest thing:** —"));
-        assert!(empty.contains("**Hostility:** avg — · 0 hostile · 0 timeouts (0s)"));
+        assert!(empty.contains("**By source:** —\n"));
+        assert!(empty.contains("**Timeouts:** 0 (0s)"));
         assert!(empty.contains("**Presence:** 0 messages · 0s in VC · 0s of speech"));
 
         let s = UserStats {
@@ -267,13 +276,24 @@ mod tests {
             reactions: 1,
             heard: 2,
             heard_audio_ms: 90_000,
-            judged: 4,
-            avg_score: Some(0.42),
-            hostile: 1,
             timed_out: 2,
             timeout_secs: 180,
             vc_secs: 3600,
         };
+        let sources = [
+            SourceStats {
+                source: "voice".into(),
+                judged: 3,
+                avg_score: Some(0.42),
+                hostile: 1,
+            },
+            SourceStats {
+                source: "edit".into(),
+                judged: 0,
+                avg_score: None,
+                hostile: 0,
+            },
+        ];
         let h = UserHighlights {
             meanest: Some(SaidHighlight {
                 said: "you're the worst".into(),
@@ -286,10 +306,14 @@ mod tests {
                 source: "message".into(),
             }),
         };
-        let text = format_user_card(&s, &h);
+        let text = format_user_card(&s, &sources, &h);
         assert!(text.contains("**Meanest thing:** \"you're the worst\" (0.90 · voice)"));
         assert!(text.contains("**Friendliest thing:** \"have a nice day\" (0.10 · message)"));
-        assert!(text.contains("**Hostility:** avg 0.42 · 1 hostile · 2 timeouts (3m)"));
+        assert!(text.contains(
+            "**By source:**\n`voice` · avg 0.42 · 3 judged · 1 hostile\n\
+             `edit` · avg — · 0 judged · 0 hostile\n"
+        ));
+        assert!(text.contains("**Timeouts:** 2 (3m)"));
         assert!(text.contains("**Presence:** 3 messages · 1h in VC · 1m 30s of speech"));
         assert!(!text.contains("Recently said"));
     }
