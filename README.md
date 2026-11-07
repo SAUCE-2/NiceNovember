@@ -13,8 +13,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
 
 - **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits, emoji
   reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
-  Swearing at a game is fine. Anything unkind about a person isn't, even teasing, sarcasm or a
-  joke between friends.
+  Swearing at a game and light banter are fine. Insults, mockery and sarcasm about a person
+  aren't, even as a joke between friends.
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
   leaves when it's empty), and transcribes each thing a participant says locally with
   [Whisper](https://github.com/ggerganov/whisper.cpp).
@@ -24,7 +24,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
   So "cringe" right after someone shares their drawing is not nice, but just saying "hostile"
   (or answering "what does the bot call you?") isn't.
 - **Public call-outs.** Each hostile message or sentence is posted to the announce channel as a
-  quote, with who said it, where, and how sure Jev is that it was hostile.
+  quote, with who said it, where, and how sure Jev is that it was hostile. Voice call-outs also
+  show the last few lines of the call before it, with what was said in bold.
 - **Timeouts for everyone.** Enforced by the bot, not Discord's timeout: until the timeout ends,
   the user's messages are deleted, their reactions are removed, and they're server-muted and
   deafened in VC.

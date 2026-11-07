@@ -298,7 +298,7 @@ mod live {
         );
         let carried = [("Alex", "I carried that round", 4)];
         let money = [("Alex", "I've made like 2 million today", 8)];
-        let cases: [(Source, &[_], &str, bool); 19] = [
+        let cases: [(Source, &[_], &str, bool); 20] = [
             (Message, &[], "hostile", false),
             (Message, &[], "toxic", false),
             (Message, &[], "not nice", false),
@@ -321,6 +321,7 @@ mod live {
             ),
             (Voice, &[], "Why are you stalking me, twin?", false),
             (Voice, &[], "I've told him off.", false),
+            (Voice, &[], "Stop gaslighting me.", false),
             (
                 Voice,
                 &[],
