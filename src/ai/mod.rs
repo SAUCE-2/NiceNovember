@@ -62,11 +62,8 @@ fn placeholders(images: &[Image]) -> Vec<&str> {
     images.iter().map(|i| i.placeholder.as_str()).collect()
 }
 
-/// Jev `state` for something said: plain text, or text plus what it replies to and images.
+/// Jev `state` for something said: its text, plus what it replies to and images.
 pub fn utterance_state(text: &str, in_reply_to: Option<&str>, images: &[Image]) -> Value {
-    if images.is_empty() && in_reply_to.is_none() {
-        return json!(text);
-    }
     let mut state = json!({ "message_text": text });
     if let Some(r) = in_reply_to {
         state["replying_to_message"] = json!(r);
@@ -135,7 +132,10 @@ mod tests {
 
     #[test]
     fn state_shapes() {
-        assert_eq!(utterance_state("hi", None, &[]), json!("hi"));
+        assert_eq!(
+            utterance_state("hi", None, &[]),
+            json!({ "message_text": "hi" })
+        );
         let img = Image {
             placeholder: "image-1-1".into(),
             jpeg: vec![],

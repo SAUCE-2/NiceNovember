@@ -16,11 +16,10 @@ pub const DEFAULT_THRESHOLD: f32 = 0.7;
 pub struct GuildConfig {
     pub participant_role_id: Option<i64>,
     pub announce_channel_id: Option<i64>,
-    pub log_channel_id: Option<i64>,
     pub voice_channel_id: Option<i64>,
     pub threshold: Option<f64>,
     pub last_setup_hash: Option<String>,
-    /// Judge as usual, but only report would-be timeouts to the log channel.
+    /// Judge and announce as usual, but don't time anyone out.
     pub shadow: bool,
 }
 
@@ -28,18 +27,12 @@ impl GuildConfig {
     pub fn threshold(&self) -> f32 {
         self.threshold.map_or(DEFAULT_THRESHOLD, |t| t as f32)
     }
-
-    /// Where details and setup notices go: the log channel, else the announce channel.
-    pub fn log_or_announce(&self) -> Option<i64> {
-        self.log_channel_id.or(self.announce_channel_id)
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum GuildField {
     ParticipantRole,
     AnnounceChannel,
-    LogChannel,
     VoiceChannel,
 }
 
@@ -48,7 +41,6 @@ pub enum GuildField {
 pub struct SetupChanges {
     pub participant_role: Option<u64>,
     pub announce_channel: Option<u64>,
-    pub log_channel: Option<u64>,
     pub voice_channel: Option<u64>,
     pub threshold: Option<f32>,
     pub shadow: Option<bool>,
@@ -57,7 +49,6 @@ pub struct SetupChanges {
 /// The optional settings `/nice unset` can clear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Clear {
-    LogChannel,
     VoiceChannel,
     Threshold,
 }
@@ -115,7 +106,7 @@ impl Db {
 
     pub async fn guild(&self, guild_id: u64) -> Result<GuildConfig> {
         let row = sqlx::query_as::<_, GuildConfig>(
-            "SELECT participant_role_id, announce_channel_id, log_channel_id, voice_channel_id,
+            "SELECT participant_role_id, announce_channel_id, voice_channel_id,
                     threshold, last_setup_hash, shadow
              FROM guild_config WHERE guild_id = ?",
         )
@@ -149,10 +140,6 @@ impl Db {
                 "INSERT INTO guild_config (guild_id, announce_channel_id) VALUES (?1, ?2)
                  ON CONFLICT (guild_id) DO UPDATE SET announce_channel_id = excluded.announce_channel_id"
             }
-            GuildField::LogChannel => {
-                "INSERT INTO guild_config (guild_id, log_channel_id) VALUES (?1, ?2)
-                 ON CONFLICT (guild_id) DO UPDATE SET log_channel_id = excluded.log_channel_id"
-            }
             GuildField::VoiceChannel => {
                 "INSERT INTO guild_config (guild_id, voice_channel_id) VALUES (?1, ?2)
                  ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id = excluded.voice_channel_id"
@@ -182,7 +169,6 @@ impl Db {
         let fields = [
             (GuildField::ParticipantRole, c.participant_role),
             (GuildField::AnnounceChannel, c.announce_channel),
-            (GuildField::LogChannel, c.log_channel),
             (GuildField::VoiceChannel, c.voice_channel),
         ];
         for (field, id) in fields {
@@ -209,10 +195,6 @@ impl Db {
 
     pub async fn clear(&self, guild_id: u64, what: Clear) -> Result<()> {
         match what {
-            Clear::LogChannel => {
-                self.set_guild_field(guild_id, GuildField::LogChannel, None)
-                    .await
-            }
             Clear::VoiceChannel => {
                 self.set_guild_field(guild_id, GuildField::VoiceChannel, None)
                     .await
@@ -343,7 +325,6 @@ mod tests {
         let g = db.guild(1).await.unwrap();
         assert!(g.participant_role_id.is_none());
         assert_eq!(g.threshold(), DEFAULT_THRESHOLD);
-        assert_eq!(g.log_or_announce(), None);
 
         for (field, v) in [
             (GuildField::ParticipantRole, 42),
@@ -360,12 +341,6 @@ mod tests {
         assert_eq!(g.voice_channel_id, Some(44));
         assert_eq!(g.threshold(), 0.5);
         assert_eq!(g.last_setup_hash.as_deref(), Some("x"));
-        assert_eq!(g.log_or_announce(), Some(43), "falls back to announce");
-
-        db.set_guild_field(1, GuildField::LogChannel, Some(45))
-            .await
-            .unwrap();
-        assert_eq!(db.guild(1).await.unwrap().log_or_announce(), Some(45));
         assert_eq!(db.voice_channels().await.unwrap(), vec![(1, 44)]);
 
         db.set_guild_field(1, GuildField::VoiceChannel, None)
@@ -382,7 +357,6 @@ mod tests {
         let all = SetupChanges {
             participant_role: Some(1),
             announce_channel: Some(2),
-            log_channel: Some(3),
             voice_channel: Some(4),
             threshold: Some(0.4),
             shadow: Some(true),
@@ -400,15 +374,12 @@ mod tests {
             (
                 g.participant_role_id,
                 g.announce_channel_id,
-                g.log_channel_id,
                 g.voice_channel_id,
                 g.threshold()
             ),
-            (Some(1), Some(2), Some(3), Some(5), 0.4)
+            (Some(1), Some(2), Some(5), 0.4)
         );
 
-        db.clear(1, Clear::LogChannel).await.unwrap();
-        assert_eq!(db.guild(1).await.unwrap().log_channel_id, None);
         db.clear(1, Clear::VoiceChannel).await.unwrap();
         assert_eq!(db.guild(1).await.unwrap().voice_channel_id, None);
         db.clear(1, Clear::Threshold).await.unwrap();

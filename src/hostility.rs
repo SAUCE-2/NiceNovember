@@ -50,25 +50,32 @@ pub struct Utterance {
     pub call: Option<Call>,
 }
 
-const TEXT_QUESTION: &str = "The state is a Discord chat message (possibly with attached images, \
-    and the message it replies to for context) from a member of a community server that has a \
-    be-nice-to-each-other rule this month. Is the author of `message_text` being not nice to \
-    someone?";
+// Jev answers one condition per Noul best, so each question only asks "is it not nice?" and the
+// criteria carry the boundary, with examples on both sides.
+const TEXT_QUESTION: &str = "The state is a Discord chat message (`message_text`, possibly with \
+    attached images and the message it replies to) from a member of a community server where \
+    everyone has agreed to be nice all month. Does `message_text` say anything not nice?";
 const VOICE_QUESTION: &str = "The state is a moment in a Discord voice call on a community server \
-    that has a be-nice-to-each-other rule this month. `speaker` just said `said_now`. \
+    where everyone has agreed to be nice all month. `speaker` just said `said_now`. \
     `people_in_call` is who's there, and `recent_conversation` is what some of them said just \
     before (it may be missing lines). Everything is speech-to-text and may contain mishearings. \
-    In `said_now`, was `speaker` not nice to someone?";
+    Did `speaker` say anything not nice in `said_now`?";
 const REACTION_QUESTION: &str = "The state is an emoji `reaction` that a member of a community \
-    server with a be-nice-to-each-other rule this month put on someone else's Discord message \
-    (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`. Is the \
-    member who reacted being not nice to someone with this reaction?";
-pub const YES: &str = "Not nice: insulting, mocking, belittling or putting someone down, \
-    name-calling, slurs, threats, telling someone to shut up, go away or die, rudely dismissing \
-    them, or contempt aimed at a person or group, including mean comments passed off as jokes";
-pub const NO: &str = "Nice or neutral: friendly talk and banter that isn't at anyone's expense, \
-    swearing that isn't aimed at anyone (\"this game is shit\"), respectful disagreement, \
-    self-deprecation, or quoting or talking about someone else being mean without joining in";
+    server where everyone has agreed to be nice all month put on someone else's Discord message \
+    (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`. Is \
+    this reaction not nice?";
+pub const YES: &str = "Not nice, even if it's mild, a joke, between friends, or about someone \
+    who isn't there: insults, name-calling, slurs, mocking, teasing, roasting or trash talk, \
+    sarcasm, passive aggression, backhanded compliments, putting down someone's looks, skills, \
+    work, taste or ideas, telling someone to shut up or go away, rudely dismissing them \
+    (\"nobody asked\", \"who cares\", \"ok and?\"), threats, wishing harm, or contempt for a \
+    person or group. Examples: \"you're so bad at this lol\", \"imagine being that dumb\", \
+    \"wow, great job, genius\", \"nobody cares\", \"ok boomer\", \"Sam's cooking is disgusting\"";
+pub const NO: &str = "Nice or neutral: friendly or kind talk, compliments, encouragement, \
+    respectful disagreement, frustration at a thing rather than a person (\"this game is \
+    shit\", \"ugh, lag again\"), self-deprecation, or quoting someone else's mean words without \
+    joining in. Examples: \"gg, well played\", \"I think you're wrong about that, here's why\", \
+    \"I'm so bad at this\", \"this boss is bullshit\"";
 
 pub fn question(source: Source) -> &'static str {
     match source {
@@ -101,8 +108,9 @@ pub fn quote(said: &str) -> String {
         .join("\n")
 }
 
-/// The public call-out posted to the announce channel.
-pub fn announcement(u: &Utterance) -> String {
+/// The public call-out posted to the announce channel, with Jev's score as a percentage. In
+/// shadow mode it says nobody was timed out.
+pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     let (did, quoted) = match u.source {
         Source::Voice => (format!("said in 🔊 <#{}>", u.channel), u.said.as_str()),
         Source::Message => (format!("said in <#{}>", u.channel), u.said.as_str()),
@@ -115,7 +123,13 @@ pub fn announcement(u: &Utterance) -> String {
             u.in_reply_to.as_deref().unwrap_or_default(),
         ),
     };
-    format!("🚫 **Not nice!** <@{}> {did}:\n{}", u.user, quote(quoted))
+    let percent = format!("{:.0}% hostile", score * 100.0);
+    let verdict = if shadow {
+        format!("👻 **Not nice** ({percent}, shadow mode: not timed out)")
+    } else {
+        format!("🚫 **Not nice!** ({percent})")
+    };
+    format!("{verdict} <@{}> {did}:\n{}", u.user, quote(quoted))
 }
 
 /// Whisper's non-speech markers like `[BLANK_AUDIO]`, `(music)` or `*coughs*`, and leftover
@@ -186,16 +200,26 @@ mod tests {
     #[test]
     fn announcements_say_where() {
         assert_eq!(
-            announcement(&utterance(Source::Voice, "shut up")),
-            "🚫 **Not nice!** <@7> said in 🔊 <#9>:\n> shut up"
+            announcement(&utterance(Source::Voice, "shut up"), 0.874, false),
+            "🚫 **Not nice!** (87% hostile) <@7> said in 🔊 <#9>:\n> shut up"
         );
-        assert!(announcement(&utterance(Source::Message, "x")).contains("said in <#9>:"));
-        assert!(announcement(&utterance(Source::Edit, "x")).contains("in an edit in <#9>"));
+        let say = |source| announcement(&utterance(source, "x"), 0.7, false);
+        assert!(say(Source::Message).contains("said in <#9>:"));
+        assert!(say(Source::Edit).contains("in an edit in <#9>"));
         let mut r = utterance(Source::Reaction, "🖕");
         r.in_reply_to = Some("I won".into());
         assert_eq!(
-            announcement(&r),
-            "🚫 **Not nice!** <@7> reacted 🖕 in <#9> to:\n> I won"
+            announcement(&r, 1.0, false),
+            "🚫 **Not nice!** (100% hostile) <@7> reacted 🖕 in <#9> to:\n> I won"
+        );
+    }
+
+    #[test]
+    fn shadow_announcements_say_nobody_was_timed_out() {
+        assert_eq!(
+            announcement(&utterance(Source::Message, "you suck"), 0.716, true),
+            "👻 **Not nice** (72% hostile, shadow mode: not timed out) <@7> said in <#9>:\n\
+             > you suck"
         );
     }
 

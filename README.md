@@ -13,7 +13,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
 
 - **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits, emoji
   reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
-  Swearing at a game is fine. Swearing at a person isn't.
+  Swearing at a game is fine. Anything unkind about a person isn't, even teasing, sarcasm or a
+  joke between friends.
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
   leaves when it's empty), and transcribes each thing a participant says locally with
   [Whisper](https://github.com/ggerganov/whisper.cpp).
@@ -21,7 +22,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
   lines of the conversation (up to 8, from the last 45 seconds), so "shut up" answering a joke
   reads differently from "shut up" aimed at someone.
 - **Public call-outs.** Each hostile message or sentence is posted to the announce channel as a
-  quote, with who said it and where.
+  quote, with who said it, where, and how sure Jev is that it was hostile.
 - **Timeouts for everyone.** Enforced by the bot, not Discord's timeout: until the timeout ends,
   the user's messages are deleted, their reactions are removed, and they're server-muted and
   deafened in VC.
@@ -35,7 +36,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Who | Participants only (the participant role) | Participants in the monitored channel |
 | What's judged | Every new message (with the message it replies to), edits that change the text, and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
 | Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
-| Then | 10s timeout, quote in the announce channel, details in the log channel | Same, and server-muted and deafened until it ends |
+| Then | 10s timeout, quote in the announce channel with Jev's score (e.g. `87% hostile`) | Same, and server-muted and deafened until it ends |
 
 **Why not Discord's timeout?** Discord won't let a bot time out the server owner, anyone with
 Administrator, or anyone above the bot's role, so the bot does it itself, the same for everyone: it
@@ -52,8 +53,8 @@ everyone else in the channel is dropped without being transcribed.
   with the message (and images) they reacted to, and transcripts of
   what they said in VC, with the display names of everyone in the call and the last few lines
   participants said. Audio never leaves your server.
-- **Posted publicly:** each hostile message or transcript, quoted in the announce channel. In
-  [shadow mode](#tuning-the-threshold) they're quoted in the log channel instead.
+- **Posted publicly:** each hostile message or transcript, quoted in the announce channel, also in
+  [shadow mode](#tuning-the-threshold).
 - **Stored in the bot's database:** the activity log (see below), which includes message content
   and transcripts from the whole server. Treat the database and exports as private.
 
@@ -63,8 +64,8 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 
 | Command | What it does |
 |---|---|
-| `/nice setup [role] [announce_channel] [log_channel] [voice_channel] [threshold] [shadow]` | Setup checklist, fixing things in one go |
-| `/nice unset <log channel\|voice channel\|threshold>` | Clear an optional setting |
+| `/nice setup [role] [announce_channel] [voice_channel] [threshold] [shadow]` | Setup checklist, fixing things in one go |
+| `/nice unset <voice channel\|threshold>` | Clear an optional setting |
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
@@ -157,7 +158,7 @@ Update with `docker compose pull && docker compose up -d`.
 The bot posts a setup checklist when it joins your server. To set it up in one go, run:
 
 ```
-/nice setup role:@Participants announce_channel:#hall-of-shame log_channel:#mod-log voice_channel:🔊General
+/nice setup role:@Participants announce_channel:#hall-of-shame voice_channel:🔊General
 ```
 
 It joins the voice channel as soon as someone's in it, and leaves once nobody else is. If it's moved
@@ -166,11 +167,10 @@ or kicked out while people are there, it comes back within 30 seconds.
 ### Tuning the threshold
 
 To find the right threshold on real conversation before anyone gets timed out, turn on shadow mode:
-`/nice setup shadow:true`. Everything is judged and logged as usual, but instead of a timeout and a
-call-out, the log channel gets `🔎 @user · Voice in 🔊General · jev 0.74 (threshold 0.70) · 👻 shadow
-mode, would have been timed out` with the quote. Too many false alarms? Raise the bar with
-`/nice setup threshold:0.8`. Letting too much through? Lower it. `/nice check` scores any text you
-type. Turn it off with `/nice setup shadow:false`.
+`/nice setup shadow:true`. Everything is judged, logged and quoted in the announce channel as usual,
+but nobody is timed out, and the call-out says `👻 Not nice (74% hostile, shadow mode: not timed
+out)`. Too many false alarms? Raise the bar with `/nice setup threshold:0.8`. Letting too much
+through? Lower it. Turn it off with `/nice setup shadow:false`.
 
 ### Configuration
 
