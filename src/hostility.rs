@@ -76,27 +76,28 @@ const REACTION_QUESTION: &str = "The state is an emoji `reaction` that a member 
     (`on_message`, possibly with images). Custom emoji are given by name, like `:clown:`. Is \
     this reaction not nice to or about someone?";
 pub const YES: &str = "Not nice to or about a person or group (whoever it's said to, someone \
-    else in the server, or someone who isn't there), even if it's mild, a joke or between \
-    friends: insults, name-calling, slurs, mocking, teasing, roasting or trash talk, sarcasm, \
-    passive aggression, backhanded compliments, putting down someone's looks, skills, work, taste \
-    or ideas, telling someone to shut up or go away, rudely dismissing them (\"nobody asked\", \
-    \"who cares\", \"ok and?\"), threats, wishing harm, or contempt for a person or group. The \
-    conversation can aim a short reply at someone: \"cringe\" or \"trash\" right after someone \
-    shares their drawing puts it down. Examples: \"you're so bad at this lol\", \"imagine being \
-    that dumb\", \"wow, great job, genius\", \"nobody cares\", \"ok boomer\", \"Sam's cooking is \
-    disgusting\"";
+    else in the server, or someone who isn't there), even if it's said as a joke: insults, \
+    name-calling, slurs, mocking or roasting someone, sarcasm, passive aggression, backhanded \
+    compliments, putting down someone's looks, skills, work, taste or ideas, telling someone to \
+    shut up or go away, rudely dismissing them (\"nobody asked\", \"who cares\", \"ok and?\"), \
+    threats, wishing harm, or contempt for a person or group. The conversation can aim a short \
+    reply at someone: \"cringe\" or \"trash\" right after someone shares their drawing puts it \
+    down. Examples: \"you're so bad at this lol\", \"imagine being that dumb\", \"wow, great \
+    job, genius\", \"nobody cares\", \"ok boomer\", \"Sam's cooking is disgusting\", \"you're a \
+    nasty man\"";
 pub const NO: &str = "Not aimed at any person or group: friendly or kind talk, compliments, \
     encouragement, respectful disagreement, frustration at a thing rather than a person (\"this \
     game is shit\", \"ugh, lag again\"), self-deprecation, quoting someone else's mean words \
     without joining in, or a word or remark that only names, asks about or discusses meanness, \
     insults, the rules or this bot. A bare word like \"hostile\", \"toxic\", \"rude\" or \"not \
-    nice\" is this unless the conversation clearly aims it at someone. So is ordinary chat with \
-    no put-down in it: questions about what someone's doing, playful banter and nicknames like \
-    \"twin\" or \"bro\", and saying what happened, even a disagreement. Examples: \"gg, well \
-    played\", \"I think you're wrong about that, here's why\", \"I'm so bad at this\", \"this \
-    boss is bullshit\", \"hostile\", \"that's rude\", \"be nice\", \"does swearing count?\", \
-    \"why are you stalking me, twin?\", \"how are you making so much money?\", \"I've told him \
-    off\"";
+    nice\" is this unless the conversation clearly aims it at someone. So is ordinary chat and \
+    light banter with no insult or put-down in it: questions about what someone's doing, playful \
+    nicknames like \"twin\" or \"bro\", pushing back in a back-and-forth, and saying what \
+    happened, even a disagreement. Examples: \"gg, well played\", \"I think you're wrong about \
+    that, here's why\", \"I'm so bad at this\", \"this boss is bullshit\", \"hostile\", \"that's \
+    rude\", \"be nice\", \"does swearing count?\", \"why are you stalking me, twin?\", \"stop \
+    gaslighting me\", \"I don't like your tone\", \"how are you making so much money?\", \"I've \
+    told him off\"";
 
 pub fn question(source: Source) -> &'static str {
     match source {

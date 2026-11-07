@@ -13,8 +13,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
 
 - **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits, emoji
   reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
-  Swearing at a game is fine. Anything unkind about a person isn't, even teasing, sarcasm or a
-  joke between friends.
+  Swearing at a game and light banter are fine. Insults, mockery and sarcasm about a person
+  aren't, even as a joke between friends.
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
   leaves when it's empty), and transcribes each thing a participant says locally with
   [Whisper](https://github.com/ggerganov/whisper.cpp).
