@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::ai::{self, jev::Image};
 use crate::app::Data;
 use crate::db::GuildConfig;
-use crate::hostility::{self, NO, Utterance, YES};
+use crate::hostility::{self, Utterance};
 use crate::stats::{self, Log, kind};
 use crate::timeout;
 
@@ -29,8 +29,7 @@ pub async fn judge(
     let n_images = images.len();
     let state = ai::state_for(&u, &images);
     let started = Instant::now();
-    let question = hostility::question(u.source);
-    let score = ai::ask_noul(data, state, images, question, Some((YES, NO))).await;
+    let verdict = ai::verdict(data, state, images, u.source).await;
     let jev_ms = started.elapsed().as_millis() as u64;
 
     let log = |kind, extra: serde_json::Value| {
@@ -47,13 +46,16 @@ pub async fn judge(
             .channel(u.channel)
             .participant(Some(true))
     };
-    let Some(score) = score else {
+    let Some(verdict) = verdict else {
         stats::record(data, guild_id, log(kind::JUDGE_FAILED, json!({}))).await;
         return Ok(());
     };
+    let score = verdict.score();
     let hostile = hostility::is_hostile(score, threshold);
     let judged = json!({
         "score": score,
+        "aimed": verdict.aimed,
+        "put_down": verdict.put_down,
         "hostile": hostile,
         "threshold": threshold,
         "jev_ms": jev_ms,
@@ -83,6 +85,8 @@ pub async fn judge(
     };
     let entry = json!({
         "score": score,
+        "aimed": verdict.aimed,
+        "put_down": verdict.put_down,
         "threshold": threshold,
         "muted": muted,
         "timeout_error": error,

@@ -13,8 +13,11 @@ Everything that happens is logged, so you can build stats from it at the end of 
 
 - **AI judging.** Messages (with the message they reply to, plus images and GIFs), edits, emoji
   reactions (with the message they're on) and speech are judged by [Jev](https://typesafe.ai), so "hostile" means more than a list of swear words.
-  Swearing at a game, or asking someone to stop something, is fine. Anything unkind about a
-  person isn't, even teasing, sarcasm or a joke between friends.
+  Jev answers two questions in context: is it aimed at a person or group, and is it a put-down?
+  It's only not nice when it's both. Swearing at a game, naming a song or artist with a slur in
+  it, quoting a lyric, or asking someone to stop something is fine. A put-down aimed at someone
+  isn't, even teasing, sarcasm or a joke between friends, and neither is using an identity as
+  the insult ("that's so gay" about a game).
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
   leaves when it's empty), and transcribes each thing a participant says locally with
   [Whisper](https://github.com/ggerganov/whisper.cpp).
@@ -38,7 +41,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
 |---|---|---|
 | Who | Participants only (the participant role) | Participants in the monitored channel |
 | What's judged | Every new message (with the recent conversation in the channel and the message it replies to), edits that change the text (with the conversation before the message), and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
-| Not nice when | Jev's score is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
+| Not nice when | Jev's score (the lower of how sure it is that it's aimed at someone and that it's a put-down) is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
 | Then | 10s timeout, quote in the announce channel with Jev's score (e.g. `87% hostile`) | Same, and server-muted and deafened until it ends |
 
 **Why not Discord's timeout?** Discord won't let a bot time out the server owner, anyone with
@@ -205,9 +208,9 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `typing`, `command`, `thread_create` | Who typed where, which slash command was used, new threads |
 | `member_seen` / `member_join` / `member_leave` / `member_update` | Names, nick and roles (snapshot at startup, then changes) |
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
-| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, `context_lines` (how much of the conversation it was judged with), and for voice `in_call` |
+| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `aimed` and `put_down` (Jev's two answers; `score` is the lower), `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, `context_lines` (how much of the conversation it was judged with), and for voice `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
-| `hostile` | Something hostile: what was `said`, `score`, `muted` (server-muted and deafened), `announced` |
+| `hostile` | Something hostile: what was `said`, `score`, `aimed`, `put_down`, `muted` (server-muted and deafened), `announced` |
 | `timed_out` / `timeout_released` | Each timeout: `secs`, `until`, `muted`; and when it was lifted |
 | `timeout_message` / `timeout_reaction` / `timeout_vc` | Tried to talk, react or join VC while timed out |
 | `pardoned` | An admin ended a timeout early (`by`) |

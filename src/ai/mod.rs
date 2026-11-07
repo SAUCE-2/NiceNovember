@@ -6,8 +6,8 @@ use poise::serenity_prelude::Message;
 use serde_json::{Value, json};
 
 use crate::app::Data;
-use crate::hostility::{STAMP, Source, Utterance};
-use jev::{Image, normalize_image, noul};
+use crate::hostility::{AIMED, PUT_DOWN, STAMP, Source, Utterance, Verdict, questions};
+use jev::{Answers, Image, Jev, normalize_image};
 
 /// Max images per message sent to Jev (keeps requests small and fast).
 const MAX_IMAGES: usize = 4;
@@ -113,25 +113,39 @@ pub fn state_for(u: &Utterance, images: &[Image]) -> Value {
     }
 }
 
-/// Ask a single yes/no question. `None` if Jev isn't configured or the call failed (logged).
-pub async fn ask_noul(
+/// Ask Jev whether what was said is aimed and a put-down. `None` if Jev isn't configured or the
+/// call failed (logged).
+pub async fn verdict(
     data: &Data,
     state: Value,
     images: Vec<Image>,
-    question: &str,
-    criteria: Option<(&str, &str)>,
-) -> Option<f32> {
+    source: Source,
+) -> Option<Verdict> {
     let jev = data.jev.as_ref()?;
-    match jev
-        .ask(state, [("q", noul(question, criteria))], images)
-        .await
-    {
-        Ok(a) => a.noul("q").ok(),
+    match ask_verdict(jev, state, images, source).await {
+        Ok(v) => Some(v),
         Err(e) => {
             tracing::warn!("jev call failed: {e:#}");
             None
         }
     }
+}
+
+async fn ask_verdict(
+    jev: &Jev,
+    state: Value,
+    images: Vec<Image>,
+    source: Source,
+) -> anyhow::Result<Verdict> {
+    let answers = jev.ask(state, questions(source), images).await?;
+    verdict_from(&answers)
+}
+
+fn verdict_from(answers: &Answers) -> anyhow::Result<Verdict> {
+    Ok(Verdict {
+        aimed: answers.noul(AIMED)?,
+        put_down: answers.noul(PUT_DOWN)?,
+    })
 }
 
 #[cfg(test)]
@@ -217,6 +231,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn verdict_reads_both_answers() {
+        let answers =
+            |a: Value| serde_json::from_value::<Answers>(json!({ "answers": a })).unwrap();
+        let both = answers(json!({
+            "aimed": { "type": "noul", "noul": 0.2 },
+            "put_down": { "type": "noul", "noul": 0.9 },
+        }));
+        assert_eq!(
+            verdict_from(&both).unwrap(),
+            Verdict {
+                aimed: 0.2,
+                put_down: 0.9
+            }
+        );
+        let one = answers(json!({ "aimed": { "type": "noul", "noul": 0.2 } }));
+        assert!(verdict_from(&one).is_err());
+    }
+
     fn attachment(content_type: Option<&str>, size: u32, url: &str) -> Attachment {
         serde_json::from_value(json!({
             "id": "1", "filename": "f", "size": size, "url": url, "proxy_url": url,
@@ -252,7 +285,7 @@ mod tests {
 mod live {
     use super::*;
     use crate::db::DEFAULT_THRESHOLD;
-    use crate::hostility::{Line, NO, YES, is_hostile, question, utterance};
+    use crate::hostility::{Line, is_hostile, utterance};
     use chrono::{TimeDelta, Utc};
 
     /// Sam says `said` now, after `before`: (who, what, how many seconds ago).
@@ -275,7 +308,7 @@ mod live {
     #[ignore]
     async fn live_boundary() {
         use Source::{Message, Voice};
-        let jev = jev::Jev::new(std::env::var("JEV_API_KEY").expect("JEV_API_KEY"));
+        let jev = Jev::new(std::env::var("JEV_API_KEY").expect("JEV_API_KEY"));
         let drawing = (
             "Alex",
             "finally finished my first drawing, what do you think?",
@@ -298,7 +331,14 @@ mod live {
         );
         let carried = [("Alex", "I carried that round", 4)];
         let money = [("Alex", "I've made like 2 million today", 8)];
-        let cases: [(Source, &[_], &str, bool); 20] = [
+        let spotify = [
+            ("Sam", "That's not even mean come.", 12),
+            ("Sam", "I'll see you.", 9),
+            ("Sam", "We will.", 6),
+        ];
+        let song = ("Alex", "what song is this?", 10);
+        let update = ("Jo", "the new update removed ranked mode", 20);
+        let cases: [(Source, &[_], &str, bool); 23] = [
             (Message, &[], "hostile", false),
             (Message, &[], "toxic", false),
             (Message, &[], "not nice", false),
@@ -329,14 +369,35 @@ mod live {
                 true,
             ),
             (Voice, &[], "I'm not as nasty as you.", true),
+            (
+                Voice,
+                &spotify,
+                "It's my favourite artist on Spotify. You know how else is one of my favourite \
+                 artists on Spotify? Big Nigger 42. He's my favourite artist on Spotify. And if I \
+                 get muted, that was in context. So it doesn't count.",
+                false,
+            ),
+            (
+                Message,
+                &[song],
+                "it's CeeLo: \"I see you driving 'round town with the girl I love and I'm like, \
+                 fuck you\"",
+                false,
+            ),
+            (Message, &[update], "that's so gay", true),
         ];
         let mut wrong = Vec::new();
         for (source, before, said, not_nice) in cases {
             let u = sam_says(source, before, said);
-            let q = noul(question(source), Some((YES, NO)));
-            let a = jev.ask(state_for(&u, &[]), [("q", q)], vec![]);
-            let score = a.await.unwrap().noul("q").unwrap();
-            println!("{score:.2} {said} (after {} lines)", before.len());
+            let v = ask_verdict(&jev, state_for(&u, &[]), vec![], source).await;
+            let v = v.unwrap();
+            let score = v.score();
+            println!(
+                "{score:.2} (aimed {:.2}, put-down {:.2}) {said} (after {} lines)",
+                v.aimed,
+                v.put_down,
+                before.len()
+            );
             if is_hostile(score, DEFAULT_THRESHOLD) != not_nice {
                 wrong.push(said);
             }

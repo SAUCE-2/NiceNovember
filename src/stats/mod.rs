@@ -28,13 +28,13 @@ pub mod kind {
     /// Whisper transcribed a participant in the monitored VC:
     /// `{text, raw, audio_ms, transcribe_ms}`.
     pub const HEARD: &str = "heard";
-    /// Jev judged an utterance: `{source, said, score, hostile, threshold, jev_ms, images,
-    /// message_id}`.
+    /// Jev judged an utterance: `{source, said, score, aimed, put_down, hostile, threshold,
+    /// jev_ms, images, message_id}` (`score` is the lower of `aimed` and `put_down`).
     pub const JUDGED: &str = "judged";
     /// Jev couldn't judge an utterance (not configured, or the call failed): `{source, said}`.
     pub const JUDGE_FAILED: &str = "judge_failed";
-    /// An utterance was hostile: `{source, said, score, threshold, message_id, muted,
-    /// timeout_error, announced}`.
+    /// An utterance was hostile: `{source, said, score, aimed, put_down, threshold, message_id,
+    /// muted, timeout_error, announced}`.
     pub const HOSTILE: &str = "hostile";
     /// Someone was timed out: `{secs, until, reason, muted}` (`muted`: server-muted and deafened).
     pub const TIMED_OUT: &str = "timed_out";
