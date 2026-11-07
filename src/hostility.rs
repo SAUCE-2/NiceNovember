@@ -103,10 +103,12 @@ const PUT_DOWN_YES: &str = "A put-down, even if it's mild, a joke or between fri
     \"ok boomer\", \"cringe\", \"I'm not as nasty as you\"";
 const PUT_DOWN_NO: &str = "Not a put-down: friendly, kind or neutral talk, compliments, \
     encouragement, questions, playful nicknames like \"twin\" or \"bro\", respectful \
-    disagreement, saying what happened, asking someone to stop something or saying how it makes \
-    you feel. Examples: \"gg, well played\", \"I think you're wrong about that, here's why\", \
-    \"how are you making so much money?\", \"I've told him off\", \"stop gaslighting me\", \
-    \"please stop\", \"I don't appreciate your tone\"";
+    disagreement, saying what happened, asking someone to stop something, objecting to something \
+    crude, rude or mean they just said or did, or saying how it makes you feel. Examples: \"gg, \
+    well played\", \"I think you're wrong about that, here's why\", \"how are you making so much \
+    money?\", \"I've told him off\", \"stop gaslighting me\", \"please stop\", \"I don't \
+    appreciate your tone\", \"that's rude\", \"be nice\", \"that's disgusting\" right after a \
+    crude sexual comment";
 
 /// The [`AIMED`] and [`PUT_DOWN`] questions for an utterance from `source`, to ask in one call.
 pub fn questions(source: Source) -> [(&'static str, Question); 2] {
