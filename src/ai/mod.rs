@@ -297,7 +297,8 @@ mod live {
             6,
         );
         let carried = [("Alex", "I carried that round", 4)];
-        let cases: [(Source, &[_], &str, bool); 14] = [
+        let money = [("Alex", "I've made like 2 million today", 8)];
+        let cases: [(Source, &[_], &str, bool); 19] = [
             (Message, &[], "hostile", false),
             (Message, &[], "toxic", false),
             (Message, &[], "not nice", false),
@@ -312,6 +313,21 @@ mod live {
             (Message, &map, "yeah it's trash", false),
             (Voice, &carried, "shut up, you were useless", true),
             (Voice, &carried, "hostile", false),
+            (
+                Voice,
+                &money,
+                "Are you fobbing it? Is that why you're making so much money?",
+                false,
+            ),
+            (Voice, &[], "Why are you stalking me, twin?", false),
+            (Voice, &[], "I've told him off.", false),
+            (
+                Voice,
+                &[],
+                "You're a nasty man, you're a really nasty man.",
+                true,
+            ),
+            (Voice, &[], "I'm not as nasty as you.", true),
         ];
         let mut wrong = Vec::new();
         for (source, before, said, not_nice) in cases {
