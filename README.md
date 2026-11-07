@@ -68,7 +68,7 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
-| `/stats <user>` | Top Trumps card: meanest/friendliest lines, hostility per source, timeouts, presence (posted in-channel) |
+| `/stats <user>` | Top Trumps card: meanest/friendliest lines and hostility per source, plus timeouts (posted in-channel) |
 | `/log summary` | How much has been logged, by kind (admin) |
 | `/log export` | Download the activity log as gzipped JSON Lines (admin) |
 | `/log wipe confirm:true [user]` | Delete logged activity, e.g. after testing (admin) |

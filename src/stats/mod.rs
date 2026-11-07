@@ -137,16 +137,11 @@ pub struct KindCount {
     pub people: i64,
 }
 
-/// Aggregates for one user in a guild, for `/stats`.
+/// Timeout totals for one user in a guild, for `/stats`.
 #[derive(Clone, Debug, Default, PartialEq, sqlx::FromRow)]
 pub struct UserStats {
-    pub messages: i64,
-    pub reactions: i64,
-    pub heard: i64,
-    pub heard_audio_ms: i64,
     pub timed_out: i64,
     pub timeout_secs: i64,
-    pub vc_secs: i64,
 }
 
 /// How one user's utterances from one source were judged, for `/stats`.
@@ -156,6 +151,12 @@ pub struct SourceStats {
     pub judged: i64,
     pub avg_score: Option<f64>,
     pub hostile: i64,
+    /// Highest-scored judged utterance from this source.
+    #[sqlx(skip)]
+    pub meanest: Option<SaidHighlight>,
+    /// Lowest-scored judged utterance from this source.
+    #[sqlx(skip)]
+    pub friendliest: Option<SaidHighlight>,
 }
 
 /// One judged utterance, for Top Trumps highlights on the `/stats` card.
@@ -163,33 +164,24 @@ pub struct SourceStats {
 pub struct SaidHighlight {
     pub said: String,
     pub score: f64,
-    pub source: String,
 }
 
 impl SaidHighlight {
-    /// Pull `said` / `score` / `source` out of a judged log row's JSON.
+    /// Pull `said` / `score` out of a judged log row's JSON.
     pub fn from_judged_data(data: &str) -> Option<Self> {
         let d: Value = serde_json::from_str(data).ok()?;
         let said = d.get("said")?.as_str()?.to_owned();
         let score = d.get("score")?.as_f64()?;
-        let source = d
-            .get("source")
-            .and_then(|s| s.as_str())
-            .unwrap_or("?")
-            .to_owned();
-        Some(Self {
-            said,
-            score,
-            source,
-        })
+        Some(Self { said, score })
     }
 }
 
-/// Meanest (highest score) and friendliest (lowest score) judged things someone said.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct UserHighlights {
-    pub meanest: Option<SaidHighlight>,
-    pub friendliest: Option<SaidHighlight>,
+/// A judged or hostile row's utterance source, `?` if it wasn't logged. A macro so queries can
+/// `concat!` it: sqlx only takes static SQL.
+macro_rules! source_sql {
+    () => {
+        "COALESCE(json_extract(data, '$.source'), '?')"
+    };
 }
 
 impl Db {
@@ -234,23 +226,14 @@ impl Db {
         .await?)
     }
 
-    /// Aggregated datapoints for one user in this guild.
+    /// Timeout totals for one user in this guild.
     pub async fn user_stats(&self, guild_id: u64, user_id: u64) -> Result<UserStats> {
         Ok(sqlx::query_as(
             "SELECT
-                COALESCE(SUM(kind = 'message'), 0) AS messages,
-                COALESCE(SUM(kind = 'reaction_add'), 0) AS reactions,
-                COALESCE(SUM(kind = 'heard'), 0) AS heard,
-                COALESCE(SUM(CASE WHEN kind = 'heard'
-                    THEN CAST(json_extract(data, '$.audio_ms') AS INTEGER) ELSE 0 END), 0)
-                    AS heard_audio_ms,
                 COALESCE(SUM(kind = 'timed_out'), 0) AS timed_out,
                 COALESCE(SUM(CASE WHEN kind = 'timed_out'
                     THEN CAST(json_extract(data, '$.secs') AS INTEGER) ELSE 0 END), 0)
-                    AS timeout_secs,
-                COALESCE(SUM(CASE WHEN kind = 'vc_session'
-                    THEN CAST(json_extract(data, '$.secs') AS INTEGER) ELSE 0 END), 0)
-                    AS vc_secs
+                    AS timeout_secs
              FROM activity_log WHERE guild_id = ? AND user_id = ?",
         )
         .bind(guild_id as i64)
@@ -259,50 +242,61 @@ impl Db {
         .await?)
     }
 
-    /// Judged and hostile counts for one user, per utterance source, most judged first.
+    /// How one user's utterances were judged, per source (most judged first), with the meanest
+    /// and friendliest thing they said from each.
     pub async fn user_sources(&self, guild_id: u64, user_id: u64) -> Result<Vec<SourceStats>> {
-        Ok(sqlx::query_as(
-            "SELECT
-                COALESCE(json_extract(data, '$.source'), '?') AS source,
+        let mut sources: Vec<SourceStats> = sqlx::query_as(concat!(
+            "SELECT ",
+            source_sql!(),
+            " AS source,
                 SUM(kind = 'judged') AS judged,
                 AVG(CASE WHEN kind = 'judged' THEN json_extract(data, '$.score') END) AS avg_score,
                 SUM(kind = 'hostile') AS hostile
              FROM activity_log
              WHERE guild_id = ? AND user_id = ? AND kind IN ('judged', 'hostile')
-             GROUP BY 1 ORDER BY judged DESC, source",
-        )
+             GROUP BY 1 ORDER BY judged DESC, source"
+        ))
         .bind(guild_id as i64)
         .bind(user_id as i64)
         .fetch_all(&self.0)
-        .await?)
-    }
-
-    /// Meanest and friendliest judged utterances for the `/stats` card.
-    pub async fn user_highlights(&self, guild_id: u64, user_id: u64) -> Result<UserHighlights> {
-        Ok(UserHighlights {
-            meanest: self.judged_by_score(guild_id, user_id, true).await?,
-            friendliest: self.judged_by_score(guild_id, user_id, false).await?,
-        })
+        .await?;
+        for s in &mut sources {
+            s.meanest = self
+                .judged_by_score(guild_id, user_id, &s.source, true)
+                .await?;
+            s.friendliest = self
+                .judged_by_score(guild_id, user_id, &s.source, false)
+                .await?;
+        }
+        Ok(sources)
     }
 
     async fn judged_by_score(
         &self,
         guild_id: u64,
         user_id: u64,
+        source: &str,
         highest: bool,
     ) -> Result<Option<SaidHighlight>> {
         let sql = if highest {
-            "SELECT data FROM activity_log
-             WHERE guild_id = ? AND user_id = ? AND kind = 'judged'
-             ORDER BY json_extract(data, '$.score') DESC, id DESC LIMIT 1"
+            concat!(
+                "SELECT data FROM activity_log
+                 WHERE guild_id = ? AND user_id = ? AND kind = 'judged' AND ",
+                source_sql!(),
+                " = ? ORDER BY json_extract(data, '$.score') DESC, id DESC LIMIT 1"
+            )
         } else {
-            "SELECT data FROM activity_log
-             WHERE guild_id = ? AND user_id = ? AND kind = 'judged'
-             ORDER BY json_extract(data, '$.score') ASC, id DESC LIMIT 1"
+            concat!(
+                "SELECT data FROM activity_log
+                 WHERE guild_id = ? AND user_id = ? AND kind = 'judged' AND ",
+                source_sql!(),
+                " = ? ORDER BY json_extract(data, '$.score') ASC, id DESC LIMIT 1"
+            )
         };
         let row: Option<(String,)> = sqlx::query_as(sql)
             .bind(guild_id as i64)
             .bind(user_id as i64)
+            .bind(source)
             .fetch_optional(&self.0)
             .await?;
         Ok(row.and_then(|(data,)| SaidHighlight::from_judged_data(&data)))
@@ -529,10 +523,6 @@ mod tests {
         let db = Db::connect("sqlite::memory:").await.unwrap();
         let day = d("2026-11-06");
         assert_eq!(db.user_stats(1, 7).await.unwrap(), UserStats::default());
-        assert_eq!(
-            db.user_highlights(1, 7).await.unwrap(),
-            UserHighlights::default()
-        );
         let entries = [
             Log::new("message", json!({})).user(UserId::new(7)),
             Log::new("message", json!({})).user(UserId::new(7)),
@@ -569,43 +559,36 @@ mod tests {
         }
 
         let s = db.user_stats(1, 7).await.unwrap();
-        assert_eq!(s.messages, 2);
-        assert_eq!(s.reactions, 1);
-        assert_eq!(s.heard, 2);
-        assert_eq!(s.heard_audio_ms, 2000);
         assert_eq!(s.timed_out, 2);
         assert_eq!(s.timeout_secs, 180);
-        assert_eq!(s.vc_secs, 300);
 
-        let h = db.user_highlights(1, 7).await.unwrap();
-        let meanest = h.meanest.unwrap();
-        assert_eq!(meanest.said, "you're the worst");
-        assert!((meanest.score - 0.9).abs() < 1e-9);
-        assert_eq!(meanest.source, "voice");
-        let friendliest = h.friendliest.unwrap();
-        assert_eq!(friendliest.said, "have a nice day");
-        assert!((friendliest.score - 0.1).abs() < 1e-9);
-        assert!(db.user_highlights(1, 9).await.unwrap().meanest.is_none());
-
+        let said = |h: &Option<SaidHighlight>| h.as_ref().unwrap().said.clone();
         let by_source = db.user_sources(1, 7).await.unwrap();
         let sources: Vec<_> = by_source.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, ["message", "voice"], "most judged first");
         let (message, voice) = (&by_source[0], &by_source[1]);
         assert_eq!((message.judged, message.hostile), (2, 0));
         assert!((message.avg_score.unwrap() - 0.3).abs() < 1e-9);
+        assert_eq!(said(&message.meanest), "meh");
+        assert_eq!(said(&message.friendliest), "have a nice day");
+        assert!((message.friendliest.as_ref().unwrap().score - 0.1).abs() < 1e-9);
         assert_eq!((voice.judged, voice.hostile), (1, 1));
         assert!((voice.avg_score.unwrap() - 0.9).abs() < 1e-9);
-        assert_eq!(db.user_sources(1, 8).await.unwrap()[0].source, "?");
+        assert_eq!(said(&voice.meanest), "you're the worst");
+        assert_eq!(said(&voice.friendliest), "you're the worst");
+        let unknown = &db.user_sources(1, 8).await.unwrap()[0];
+        assert_eq!(
+            (unknown.source.as_str(), said(&unknown.meanest)),
+            ("?", "other".into())
+        );
         assert!(db.user_sources(1, 9).await.unwrap().is_empty());
     }
 
     #[test]
     fn highlight_from_judged_json() {
         assert!(SaidHighlight::from_judged_data("nope").is_none());
-        let h = SaidHighlight::from_judged_data(r#"{"said":"hi","score":0.25,"source":"message"}"#)
-            .unwrap();
+        let h = SaidHighlight::from_judged_data(r#"{"said":"hi","score":0.25}"#).unwrap();
         assert_eq!(h.said, "hi");
         assert!((h.score - 0.25).abs() < 1e-9);
-        assert_eq!(h.source, "message");
     }
 }
