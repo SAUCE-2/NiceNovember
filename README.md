@@ -118,6 +118,9 @@ Then run the same install command again. It writes the systemd units, enables li
 keeps running in Game Mode and after logout (it asks for your sudo password once; set one with
 `passwd` if you never have), and starts the bot. You can run it again at any time.
 
+Podman keeps the image up to date but not the units, so when a release changes them (the
+dashboard's port did), run the install command again to pick them up.
+
 Useful commands:
 
 ```bash
@@ -240,11 +243,12 @@ you. It shows:
   said, moderation, voice, presence or other, search it, and open any entry for its raw data.
 
 Each link carries a key for your server and works for 7 days; anyone with it can read the log, so
-don't share it. For the links to work from other devices, set `DASHBOARD_URL` in `.env` to how you
-reach the bot's machine, e.g. `http://steamdeck.local:8080` or `http://192.168.1.20:8080`, and keep
-port 8080 inside your home network (don't forward it from your router). The Steam Machine install
-publishes it on port 8080 (`NICENOVEMBER_PORT=9090` picks another) and the Docker Compose file does
-the same.
+don't share it. For the links to work from other devices, `DASHBOARD_URL` in `.env` must say how you
+reach the bot's machine, e.g. `http://steamdeck.local:8080` or `http://192.168.1.20:8080`. The Steam
+Machine install fills it in with the machine's name (which also works over Tailscale's MagicDNS) if
+it's empty. Keep port 8080 inside your home network (don't forward it from your router). The Steam
+Machine install publishes it on port 8080 (`NICENOVEMBER_PORT=9090` picks another) and the Docker
+Compose file does the same.
 
 ### Export
 
