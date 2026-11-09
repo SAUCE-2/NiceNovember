@@ -48,3 +48,5 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
  deafened in VC. It works the same on everyone, the owner and admins included.
 - **Monitored channel**: the one voice channel the bot always sits in and listens to.
 - **Activity log**: the raw record of everything that happens, for building stats afterwards.
+- **Dashboard**: the web page the bot serves to browse the activity log person by person. A
+  **dashboard link** (from `/log dashboard`) carries a key that opens one server's log for 7 days.
