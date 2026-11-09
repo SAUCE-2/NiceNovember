@@ -271,10 +271,18 @@ pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     format!("{verdict} <@{}> {did}:\n{quoted}", u.user)
 }
 
-/// Whisper's non-speech markers like `[BLANK_AUDIO]`, `(music)` or `*coughs*`, and leftover
-/// punctuation, removed. Empty means nothing was said.
+/// Whisper's transcript on one line, keeping sound markers like `*laughs*` or `(laughing)` so
+/// Jev can tell banter from a dig. Empty when no words were said, only markers like
+/// `[BLANK_AUDIO]` or `(music)` and punctuation.
 pub fn clean_transcript(text: &str) -> String {
-    let mut out = String::new();
+    if !words_outside_markers(text) {
+        return String::new();
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether anything outside `[...]`, `(...)` and `*...*` is a letter or digit.
+fn words_outside_markers(text: &str) -> bool {
     let mut close: Option<char> = None;
     for c in text.chars() {
         match (close, c) {
@@ -283,15 +291,11 @@ pub fn clean_transcript(text: &str) -> String {
             (None, '[') => close = Some(']'),
             (None, '(') => close = Some(')'),
             (None, '*') => close = Some('*'),
-            (None, c) => out.push(c),
+            (None, c) if c.is_alphanumeric() => return true,
+            (None, _) => {}
         }
     }
-    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    if out.chars().any(char::is_alphanumeric) {
-        out
-    } else {
-        String::new()
-    }
+    false
 }
 
 #[cfg(test)]
@@ -461,11 +465,19 @@ mod tests {
     }
 
     #[test]
-    fn transcripts_lose_non_speech() {
+    fn transcripts_without_words_are_dropped() {
         assert_eq!(clean_transcript(" [BLANK_AUDIO] "), "");
         assert_eq!(clean_transcript("(music) ..."), "");
-        assert_eq!(clean_transcript("*coughs* you  idiot [noise]"), "you idiot");
+        assert_eq!(clean_transcript("*laughs* [noise]"), "");
+    }
+
+    #[test]
+    fn transcripts_keep_the_sounds_said_with_words() {
+        assert_eq!(
+            clean_transcript(" *laughs*  you  idiot (laughing) "),
+            "*laughs* you idiot (laughing)"
+        );
         assert_eq!(clean_transcript("Hello there."), "Hello there.");
-        assert_eq!(clean_transcript("unclosed [bracket"), "unclosed");
+        assert_eq!(clean_transcript("unclosed [bracket"), "unclosed [bracket");
     }
 }
