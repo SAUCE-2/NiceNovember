@@ -29,8 +29,8 @@ pub mod kind {
     /// `{text, raw, audio_ms, transcribe_ms}`.
     pub const HEARD: &str = "heard";
     /// Jev judged an utterance: `{source, said, score, aimed, put_down, meanness, hostile,
-    /// threshold, jev_ms, images, message_id}` (`score` is the lower of `aimed` and `put_down`;
-    /// `meanness` is 0 to 1, added afterwards to entries from before it was asked).
+    /// threshold, jev_ms, images, message_id}` (`score` is [`crate::hostility::Verdict::score`],
+    /// from all three; `meanness` is 0 to 1, added afterwards to entries from before it was asked).
     pub const JUDGED: &str = "judged";
     /// Jev couldn't judge an utterance (not configured, or the call failed): `{source, said}`.
     pub const JUDGE_FAILED: &str = "judge_failed";
