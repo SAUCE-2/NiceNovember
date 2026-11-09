@@ -32,6 +32,12 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: node --test dashboard/logs.test.js
+
   deploy-script:
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +67,7 @@ jobs:
   # Only main publishes an image; the Steam Machine's update timer pulls :latest. Each one is also
   # tagged with its semantic version, and the commit with a matching vX.Y.Z git tag.
   publish:
-    needs: [test, deploy-script]
+    needs: [test, dashboard, deploy-script]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

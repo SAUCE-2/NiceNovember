@@ -43,4 +43,6 @@ USER nice
 ENV DATABASE_URL=sqlite:///data/nicenovember.db \
     WHISPER_MODEL=/models/ggml-base.en.bin
 VOLUME /data
+# The dashboard (`/log dashboard`).
+EXPOSE 8080
 CMD ["nicenovember"]
