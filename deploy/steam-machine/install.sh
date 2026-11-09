@@ -51,6 +51,14 @@ grep -q '^JEV_API_KEY=..*' "$DIR/.env" || echo "warning: JEV_API_KEY is empty, s
 systemctl --user disable --now nicenovember-update.timer >/dev/null 2>&1 || true
 rm -f "$UNITS/nicenovember-update.service" "$UNITS/nicenovember-update.timer" "$DIR/update.sh"
 
+# Where /log dashboard links point. Without it they'd say localhost, which only works on this
+# machine. Its name works from the LAN and over Tailscale's MagicDNS; change it if you reach it
+# another way.
+if ! grep -q '^DASHBOARD_URL=..*' "$DIR/.env"; then
+  sed -i '/^DASHBOARD_URL=/d' "$DIR/.env"
+  echo "DASHBOARD_URL=http://$(hostname):$PORT" >>"$DIR/.env"
+fi
+
 cat > "$QUADLETS/nicenovember.container" <<UNIT
 [Unit]
 Description=NiceNovember Discord bot
@@ -91,7 +99,4 @@ if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]; the
     echo "warning: couldn't enable linger; run 'sudo loginctl enable-linger $USER' yourself"
 fi
 
-grep -q '^DASHBOARD_URL=..*' "$DIR/.env" ||
-  echo "To get dashboard links (/log dashboard) that work, set DASHBOARD_URL in $DIR/.env to" \
-    "http://<this machine's name or IP>:$PORT and run this again."
-echo "Done. Logs: podman logs -f nicenovember"
+echo "Done. Dashboard: $(sed -n 's/^DASHBOARD_URL=//p' "$DIR/.env")  Logs: podman logs -f nicenovember"

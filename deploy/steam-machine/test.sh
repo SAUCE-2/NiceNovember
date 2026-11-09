@@ -20,6 +20,10 @@ cat >"$T/bin/loginctl" <<'SHIM'
 #!/usr/bin/env bash
 echo no
 SHIM
+cat >"$T/bin/hostname" <<'SHIM'
+#!/usr/bin/env bash
+echo steampc
+SHIM
 chmod +x "$T/bin/"*
 export PATH=$T/bin:$PATH
 
@@ -43,7 +47,8 @@ mkdir -p "$units"
 touch "$units/nicenovember-update.service" "$units/nicenovember-update.timer" "$HOME/nicenovember/update.sh"
 sed -i 's/^DISCORD_TOKEN=$/DISCORD_TOKEN=x/; s/^JEV_API_KEY=$/JEV_API_KEY=y/' "$HOME/nicenovember/.env"
 out=$("$HERE/install.sh")
-[[ $out == *"set DASHBOARD_URL"* ]] || fail "should say how to get dashboard links: $out"
+grep -qx 'DASHBOARD_URL=http://steampc:8080' "$HOME/nicenovember/.env" || fail "DASHBOARD_URL not filled in"
+[[ $out == *"http://steampc:8080"* ]] || fail "should say where the dashboard is: $out"
 
 quadlet=$XDG_CONFIG_HOME/containers/systemd/nicenovember.container
 for line in Image=ghcr.io/sauce-2/nicenovember:latest ContainerName=nicenovember \
@@ -69,11 +74,12 @@ for q in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
   echo "quadlet generator ($q): ok"
 done
 
-# 5. Re-installing keeps the filled-in .env, and once DASHBOARD_URL is set stops asking for it.
-echo "DASHBOARD_URL=http://deck.local:8080" >>"$HOME/nicenovember/.env"
-out=$("$HERE/install.sh")
+# 5. Re-installing keeps the filled-in .env, including a DASHBOARD_URL you set yourself.
+sed -i 's|^DASHBOARD_URL=.*|DASHBOARD_URL=https://steampc.example.ts.net|' "$HOME/nicenovember/.env"
+"$HERE/install.sh" >/dev/null
 grep -q '^DISCORD_TOKEN=x$' "$HOME/nicenovember/.env" || fail ".env overwritten"
-[[ $out != *"set DASHBOARD_URL"* ]] || fail "asked for DASHBOARD_URL again: $out"
+grep -qx 'DASHBOARD_URL=https://steampc.example.ts.net' "$HOME/nicenovember/.env" || fail "DASHBOARD_URL overwritten"
+[ "$(grep -c '^DASHBOARD_URL=' "$HOME/nicenovember/.env")" = 1 ] || fail "DASHBOARD_URL duplicated"
 
 # 6. The dashboard can go on another port.
 NICENOVEMBER_PORT=9090 "$HERE/install.sh" >/dev/null
