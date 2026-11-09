@@ -1,10 +1,11 @@
-//! Logs Discord events as they arrive, for everyone (bots excluded), with the full payload.
+//! Logs Discord events as they arrive, with the full payload. Only participants are logged: events
+//! about anyone else (and bots) are dropped. Entries about nobody in particular are kept.
 //!
 //! | kind | user | data |
 //! |---|---|---|
 //! | `message` | author | the whole message (content, attachments, embeds, mentions, reply, ...) |
 //! | `message_edit` | author | the update event (new content, edited_timestamp, ...) |
-//! | `message_delete` | author, if we logged the message | `{message_id}` |
+//! | `message_delete` | author (only messages we logged) | `{message_id}` |
 //! | `message_delete_bulk` | | `{message_ids}` |
 //! | `reaction_add` / `reaction_remove` | reactor | the reaction (emoji, message_id, message_author_id) |
 //! | `voice` | member | `{change: join/leave/move/update, old, new}` voice states (mute, deaf, stream, video) |
@@ -13,7 +14,7 @@
 //! | `typing` | typer | `{timestamp}` |
 //! | `command` | user | `{name, data}` slash command used |
 //! | `member_seen` | member | the member (names, nick, roles, joined_at), once per bot start |
-//! | `member_join` / `member_leave` / `member_update` | member | member details; updates include the old nick and roles |
+//! | `member_join` / `member_leave` / `member_update` | member | member details; updates include the old nick and roles, and are logged when they had the role before or after |
 //! | `thread_create` | owner | `{name, parent_id}` |
 
 use poise::serenity_prelude::{
@@ -23,6 +24,16 @@ use serde_json::json;
 
 use super::{Log, kind, record};
 use crate::app::Data;
+use crate::participant::holds;
+
+/// The guild's participant role (`None` if it isn't set or can't be read).
+async fn participant_role(data: &Data, guild_id: GuildId) -> Option<i64> {
+    data.db
+        .guild(guild_id.get())
+        .await
+        .ok()?
+        .participant_role_id
+}
 
 /// Does `user` hold the participant role, from the cache (`None` = not cached).
 pub async fn participant(
@@ -31,31 +42,29 @@ pub async fn participant(
     guild_id: GuildId,
     user: UserId,
 ) -> Option<bool> {
-    let role = data
-        .db
-        .guild(guild_id.get())
-        .await
-        .ok()?
-        .participant_role_id;
-    if role.is_none() {
+    let Some(role) = participant_role(data, guild_id).await else {
         return Some(false);
-    }
+    };
     let g = ctx.cache.guild(guild_id)?;
     let member = g.members.get(&user)?;
-    Some(crate::participant::holds(role, &member.roles))
+    Some(holds(Some(role), &member.roles))
+}
+
+/// Is someone logged? Only when they're known to hold the participant role.
+fn tracked(participant: Option<bool>) -> bool {
+    participant == Some(true)
 }
 
 fn is_bot(ctx: &serenity::Context, user: UserId) -> bool {
     user == ctx.cache.current_user().id || ctx.cache.user(user).is_some_and(|u| u.bot)
 }
 
-/// Log `log` about `user`, filling in whether they're a participant. Skips bots.
+/// Log `log` about `user` if they're a participant. Skips bots and everyone else.
 async fn log_user(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: UserId, log: Log) {
-    if is_bot(ctx, user) {
+    if is_bot(ctx, user) || !tracked(participant(ctx, data, guild_id, user).await) {
         return;
     }
-    let e = participant(ctx, data, guild_id, user).await;
-    record(data, guild_id, log.user(user).participant(e)).await;
+    record(data, guild_id, log.user(user).participant(Some(true))).await;
 }
 
 pub async fn capture(ctx: &serenity::Context, event: &FullEvent, data: &Data) {
@@ -90,12 +99,11 @@ pub async fn capture(ctx: &serenity::Context, event: &FullEvent, data: &Data) {
                 .await
                 .ok()
                 .flatten();
+            // A message we didn't log was someone else's, or from before the bot was here.
+            let Some(u) = author else { return };
             let log = Log::new("message_delete", json!({ "message_id": id.to_string() }))
                 .channel(*channel_id);
-            match author {
-                Some(u) => log_user(ctx, data, *g, UserId::new(u as u64), log).await,
-                None => record(data, *g, log).await,
-            }
+            log_user(ctx, data, *g, UserId::new(u as u64), log).await;
         }
         FullEvent::MessageDeleteBulk {
             channel_id,
@@ -168,12 +176,18 @@ pub async fn capture(ctx: &serenity::Context, event: &FullEvent, data: &Data) {
             user,
             member_data_if_available,
         } => {
-            if !user.bot {
+            // They're gone from the cache, so only the member data says if they had the role.
+            let role = participant_role(data, *guild_id).await;
+            let was = member_data_if_available
+                .as_ref()
+                .map(|m| holds(role, &m.roles));
+            if !user.bot && tracked(was) {
                 let log = Log::new(
                     "member_leave",
                     json!({ "user": user, "member": member_data_if_available }),
                 )
-                .user(user.id);
+                .user(user.id)
+                .participant(Some(true));
                 record(data, *guild_id, log).await;
             }
         }
@@ -182,7 +196,11 @@ pub async fn capture(ctx: &serenity::Context, event: &FullEvent, data: &Data) {
             event: e,
             ..
         } => {
-            if !e.user.bot {
+            // Log gaining or losing the role too, not just changes while they hold it.
+            let role = participant_role(data, e.guild_id).await;
+            let was = old_if_available.as_ref().map(|m| holds(role, &m.roles));
+            let is = holds(role, &e.roles);
+            if !e.user.bot && (is || tracked(was)) {
                 let log = Log::new(
                     "member_update",
                     json!({
@@ -191,7 +209,8 @@ pub async fn capture(ctx: &serenity::Context, event: &FullEvent, data: &Data) {
                         "new": e,
                     }),
                 );
-                log_user(ctx, data, e.guild_id, e.user.id, log).await;
+                let log = log.user(e.user.id).participant(Some(is));
+                record(data, e.guild_id, log).await;
             }
         }
         FullEvent::ThreadCreate { thread } => {
@@ -303,6 +322,14 @@ mod tests {
         assert_eq!(voice_change(a, b), "move");
         assert_eq!(voice_change(a, a), "update");
         assert_eq!(voice_change(None, None), "update");
+    }
+
+    #[test]
+    fn only_participants_are_tracked() {
+        use super::tracked;
+        assert!(tracked(Some(true)));
+        assert!(!tracked(Some(false)), "not in the role");
+        assert!(!tracked(None), "not cached, so not known to be in the role");
     }
 
     #[test]
