@@ -36,6 +36,8 @@ Everything that happens is logged, so you can build stats from it at the end of 
   deafened in VC.
 - **Loads of metrics.** Every message, reaction, voice join, presence change, transcript, Jev score,
   timeout and pardon goes into an activity log you can export.
+- **Dashboard.** Browse that log person by person in your browser, live from the bot's database:
+  `/log dashboard` gives you the link.
 
 ## How it works
 
@@ -65,6 +67,8 @@ everyone else in the channel is dropped without being transcribed.
   [shadow mode](#tuning-the-threshold).
 - **Stored in the bot's database:** the activity log (see below), which includes message content
   and transcripts from the whole server. Treat the database and exports as private.
+- **Shown on the [dashboard](#dashboard):** the same log, to whoever has a `/log dashboard` link
+  (admins get one, and it works for 7 days).
 
 ## Commands
 
@@ -79,6 +83,7 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
 | `/stats <user>` | Top Trumps card: meanest/friendliest lines and hostility per source, plus timeouts (posted in-channel) |
 | `/log summary` | How much has been logged, by kind (admin) |
+| `/log dashboard` | A link to the [dashboard](#dashboard): everyone's log, person by person, live (admin) |
 | `/log export` | Download the activity log as gzipped JSON Lines (admin) |
 | `/log wipe confirm:true [user]` | Delete logged activity, e.g. after testing (admin) |
 
@@ -188,6 +193,8 @@ All settings are environment variables in `.env`:
 |---|---|
 | `DISCORD_TOKEN` | **Required.** Your bot token |
 | `JEV_API_KEY` | **Required to judge anything.** Without it the bot only logs |
+| `DASHBOARD_URL` | Where you open the [dashboard](#dashboard), e.g. `http://steamdeck.local:8080`. `/log dashboard` links point here (default `http://localhost:8080`) |
+| `DASHBOARD_PORT` | Port the dashboard listens on inside the container (default `8080`) |
 | `BOT_TZ` | Timezone that decides which day each activity log entry is filed under (default `Europe/London`) |
 | `DEV_GUILD_ID` | Register commands in one server only, so they update instantly. Leave empty in production |
 | `RUST_LOG` | Log level |
@@ -217,6 +224,28 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `timeout_message` / `timeout_reaction` / `timeout_vc` | Tried to talk, react or join VC while timed out |
 | `pardoned` | An admin ended a timeout early (`by`) |
 | `monitor_joined` / `monitor_left` / `monitor_failed` | The bot joined the monitored voice channel, left voice, or couldn't join |
+
+### Dashboard
+
+The bot serves a dashboard of the activity log on port 8080, read live from its own database, so
+there's no file to export or upload. Run `/log dashboard` (admins only) and open the link it gives
+you. It shows:
+
+- **Everyone in the log**, busiest first, with how many times each was not nice. Server-wide
+  entries (the bot joining or leaving voice, bulk deletes) are listed on their own.
+- **For each person:** their totals (entries, things said, judged, average hostility, not nice,
+  timeouts), their entries per day, and their whole log, newest first: what they said in chat and
+  in voice, how Jev judged it, timeouts, voice joins, presence and the rest. Filter it by
+  said, moderation, voice, presence or other, search it, and open any entry for its raw data.
+
+Each link carries a key for your server and works for 7 days; anyone with it can read the log, so
+don't share it. For the links to work from other devices, set `DASHBOARD_URL` in `.env` to how you
+reach the bot's machine, e.g. `http://steamdeck.local:8080` or `http://192.168.1.20:8080`, and keep
+port 8080 inside your home network (don't forward it from your router). The Steam Machine install
+publishes it on port 8080 (`NICENOVEMBER_PORT=9090` picks another) and the Docker Compose file does
+the same.
+
+### Export
 
 To get the data out, run `/log export`. It gives you a `.jsonl.gz` file with one JSON object per
 line. If it's over Discord's 10 MB upload limit, copy the database instead (see above) and query it
@@ -266,7 +295,12 @@ The live tests are ignored by default. With a Whisper model and a 16 kHz mono WA
 STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh cargo test -- --ignored --nocapture
 ```
 
-`deploy/steam-machine/test.sh` checks the install script against a fake Podman and systemd.
+`deploy/steam-machine/test.sh` checks the install script against a fake Podman and systemd, and
+this tests the dashboard page's wording:
+
+```bash
+node --test dashboard/logs.test.js
+```
 
 ### Where things are
 
@@ -278,10 +312,13 @@ STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh carg
 | `src/voice/monitor.rs` | Sitting in the monitored channel and turning speech into utterances |
 | `src/voice/segmenter.rs` | Cutting each speaker's audio into one segment per thing said |
 | `src/stats/` | The activity log, its capture of Discord events, and the export |
+| `src/dashboard/` | The dashboard's web server: its API over the activity log, and its link keys |
+| `dashboard/` | The dashboard page itself (built into the binary) |
 | `deploy/steam-machine/` | Install script for rootless Podman + systemd (Quadlet) |
 
 Made with the same stack as [SpiritBot](https://github.com/SAUCE-2/spritbot-slop). CI runs
-`cargo fmt`, `clippy`, tests and the deploy script tests on every PR, and builds the image.
+`cargo fmt`, `clippy`, tests, the dashboard page's tests and the deploy script tests on every PR, and
+builds the image.
 
 Every push to `main` publishes the image as `:latest`, `:<commit>` and `:<version>`, and tags the
 commit `v<version>`. The version is [semver](https://semver.org) worked out from the

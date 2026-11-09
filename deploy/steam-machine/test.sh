@@ -42,11 +42,13 @@ units=$XDG_CONFIG_HOME/systemd/user
 mkdir -p "$units"
 touch "$units/nicenovember-update.service" "$units/nicenovember-update.timer" "$HOME/nicenovember/update.sh"
 sed -i 's/^DISCORD_TOKEN=$/DISCORD_TOKEN=x/; s/^JEV_API_KEY=$/JEV_API_KEY=y/' "$HOME/nicenovember/.env"
-"$HERE/install.sh" >/dev/null
+out=$("$HERE/install.sh")
+[[ $out == *"set DASHBOARD_URL"* ]] || fail "should say how to get dashboard links: $out"
 
 quadlet=$XDG_CONFIG_HOME/containers/systemd/nicenovember.container
 for line in Image=ghcr.io/sauce-2/nicenovember:latest ContainerName=nicenovember \
-  "EnvironmentFile=$HOME/nicenovember/.env" Volume=nicenovember-data:/data AutoUpdate=registry \
+  "EnvironmentFile=$HOME/nicenovember/.env" Volume=nicenovember-data:/data PublishPort=8080:8080 \
+  AutoUpdate=registry \
   Restart=always WantedBy=default.target; do
   grep -qx -- "$line" "$quadlet" || fail "$quadlet lacks $line"
 done
@@ -67,8 +69,14 @@ for q in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
   echo "quadlet generator ($q): ok"
 done
 
-# 5. Re-installing keeps the filled-in .env.
-"$HERE/install.sh" >/dev/null
+# 5. Re-installing keeps the filled-in .env, and once DASHBOARD_URL is set stops asking for it.
+echo "DASHBOARD_URL=http://deck.local:8080" >>"$HOME/nicenovember/.env"
+out=$("$HERE/install.sh")
 grep -q '^DISCORD_TOKEN=x$' "$HOME/nicenovember/.env" || fail ".env overwritten"
+[[ $out != *"set DASHBOARD_URL"* ]] || fail "asked for DASHBOARD_URL again: $out"
+
+# 6. The dashboard can go on another port.
+NICENOVEMBER_PORT=9090 "$HERE/install.sh" >/dev/null
+grep -qx "PublishPort=9090:8080" "$quadlet" || fail "dashboard port"
 
 echo "deploy scripts: ok"

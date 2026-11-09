@@ -15,6 +15,8 @@ DIR=${NICENOVEMBER_DIR:-$HOME/nicenovember}
 UNITS=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 QUADLETS=${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd
 RAW=${NICENOVEMBER_RAW:-https://raw.githubusercontent.com/SAUCE-2/NiceNovember/main}
+# The port the dashboard is on, on this machine.
+PORT=${NICENOVEMBER_PORT:-8080}
 # The checkout this script is in, or empty when it's piped in from curl.
 HERE=
 if [ -f "${BASH_SOURCE[0]:-}" ]; then
@@ -58,6 +60,7 @@ Image=$IMAGE
 ContainerName=nicenovember
 EnvironmentFile=$DIR/.env
 Volume=nicenovember-data:/data
+PublishPort=$PORT:8080
 AutoUpdate=registry
 
 [Service]
@@ -88,4 +91,7 @@ if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]; the
     echo "warning: couldn't enable linger; run 'sudo loginctl enable-linger $USER' yourself"
 fi
 
+grep -q '^DASHBOARD_URL=..*' "$DIR/.env" ||
+  echo "To get dashboard links (/log dashboard) that work, set DASHBOARD_URL in $DIR/.env to" \
+    "http://<this machine's name or IP>:$PORT and run this again."
 echo "Done. Logs: podman logs -f nicenovember"

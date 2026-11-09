@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>NiceNovember Logs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1><span aria-hidden="true">🤝</span> <span id="guild">NiceNovember</span></h1>
+    <button id="refresh" type="button" hidden>Refresh</button>
+  </header>
+
+  <p id="notice" class="notice" hidden></p>
+
+  <main id="app" hidden>
+    <nav class="people" aria-label="People">
+      <input id="find" type="search" placeholder="Find someone" aria-label="Find someone">
+      <ul id="people"></ul>
+    </nav>
+
+    <section class="person" id="person" aria-live="polite">
+      <header class="person-head">
+        <h2 id="name"></h2>
+        <p id="seen" class="muted"></p>
+      </header>
+
+      <div class="tiles" id="tiles"></div>
+
+      <figure class="chart">
+        <figcaption>Entries per day</figcaption>
+        <div class="plot" id="plot"></div>
+        <details>
+          <summary>Show as table</summary>
+          <table id="days-table"><thead><tr><th>Day</th><th>Entries</th><th>Not nice</th></tr></thead><tbody></tbody></table>
+        </details>
+      </figure>
+
+      <div class="filters">
+        <div class="chips" id="groups" role="group" aria-label="Show"></div>
+        <input id="search" type="search" placeholder="Search their log" aria-label="Search their log">
+      </div>
+
+      <ol class="log" id="log"></ol>
+      <p id="log-status" class="muted"></p>
+      <button id="more" type="button" hidden>Load older</button>
+    </section>
+  </main>
+
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+
+  <script src="logs.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

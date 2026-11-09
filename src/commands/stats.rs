@@ -45,7 +45,7 @@ pub async fn stats(
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("summary", "export", "wipe"),
+    subcommands("summary", "dashboard", "export", "wipe"),
     subcommand_required,
     default_member_permissions = "ADMINISTRATOR",
     required_permissions = "ADMINISTRATOR"
@@ -66,6 +66,33 @@ async fn summary(ctx: Ctx<'_>) -> Result<()> {
     ctx.send(CreateReply::default().embed(embed).ephemeral(true))
         .await?;
     Ok(())
+}
+
+/// A link to browse the activity log person by person, live.
+#[poise::command(slash_command)]
+async fn dashboard(ctx: Ctx<'_>) -> Result<()> {
+    let guild_id = guild(ctx)?;
+    let data = ctx.data();
+    let key = data
+        .db
+        .new_dashboard_key(guild_id.get(), chrono::Utc::now())
+        .await?;
+    let url = crate::dashboard::link(&data.cfg.dashboard_url, &key);
+    ctx.send(
+        CreateReply::default()
+            .content(dashboard_reply(&url))
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
+fn dashboard_reply(url: &str) -> String {
+    let days = crate::dashboard::keys::LINK_LIFETIME.num_days();
+    format!(
+        "📊 {url}\nWorks for {days} days. Anyone with this link can read everything that's \
+         logged, so don't share it. Wrong address? Set `DASHBOARD_URL` in `.env`."
+    )
 }
 
 /// Download the activity log as gzipped JSON Lines.
@@ -226,6 +253,16 @@ mod tests {
         assert!(text.contains("`message` · 3 (2 people)"));
         assert!(text.contains("**4** entries"));
         assert!(text.contains("`/log export`"));
+    }
+
+    #[test]
+    fn dashboard_reply_text() {
+        assert_eq!(
+            dashboard_reply("http://deck.local:8080/#key=abc"),
+            "📊 http://deck.local:8080/#key=abc\nWorks for 7 days. Anyone with this link can read \
+             everything that's logged, so don't share it. Wrong address? Set `DASHBOARD_URL` in \
+             `.env`."
+        );
     }
 
     #[test]

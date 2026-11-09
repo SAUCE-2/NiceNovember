@@ -7,10 +7,12 @@ publish = false
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json", "query"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 dashmap = "6"
 flate2 = "1"
+getrandom = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 poise = "0.7"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart"] }
@@ -24,3 +26,6 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 whisper-rs = "0.16"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
