@@ -105,6 +105,14 @@ impl Answers {
             other => Err(anyhow!("expected noul answer for {id}, got {other:?}")),
         }
     }
+
+    /// A Score's place on its levels: 0 to the top level, between two when Jev is torn.
+    pub fn score(&self, id: &str) -> Result<f32> {
+        match self.answers.get(id) {
+            Some(Answer::Score { score, .. }) => Ok(*score),
+            other => Err(anyhow!("expected score answer for {id}, got {other:?}")),
+        }
+    }
 }
 
 /// An image to attach, referenced from `state`/instructions by its placeholder string.

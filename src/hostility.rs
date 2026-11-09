@@ -3,12 +3,12 @@
 
 use chrono::{DateTime, Utc};
 use poise::serenity_prelude::{ChannelId, MessageId, UserId};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::ai::jev::{Question, noul};
 
 /// Where an utterance came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
     /// A new chat message.
@@ -110,13 +110,40 @@ const PUT_DOWN_NO: &str = "Not a put-down: friendly, kind or neutral talk, compl
     appreciate your tone\", \"that's rude\", \"be nice\", \"that's disgusting\" right after a \
     crude sexual comment";
 
-/// The [`AIMED`] and [`PUT_DOWN`] questions for an utterance from `source`, to ask in one call.
-pub fn questions(source: Source) -> [(&'static str, Question); 2] {
-    let (setting, it) = match source {
+/// Jev's rating of how mean it is; see [`meanness_question`].
+pub const MEANNESS: &str = "meanness";
+
+// How mean, from nothing to the worst, each level a situation Jev can match on its own. Asked
+// about everything, so a nice line rates at the bottom rather than being skipped.
+const MEANNESS_LEVELS: [&str; 5] = [
+    "Not mean to anyone: kind, friendly or neutral talk, a joke nobody is the butt of, or \
+     complaining about a thing rather than a person. Examples: \"gg, well played\", \"this boss \
+     is bullshit\", \"stop gaslighting me\"",
+    "A gentle jab: mild, playful teasing that friends would laugh off. Examples: \"ok boomer\", \
+     \"nice aim, grandpa\", \"cringe\" about a friend's bad pun",
+    "A put-down that stings: a clear insult, mockery, sarcasm or rude dismissal. Examples: \
+     \"lmao your aim is trash\", \"nobody asked you\", \"wow, great job, genius\"",
+    "Harsh and personal: attacking who someone is, their looks, intelligence or worth, or \
+     humiliating them. Examples: \"you're useless and everyone knows it\", \"imagine being \
+     that dumb\", \"you're a really nasty man\"",
+    "Cruel or hateful: a slur or hate aimed at a person or group, a threat, wishing harm, or \
+     telling someone to hurt or kill themselves. Examples: \"go kill yourself\", \"I hope you \
+     die\"",
+];
+
+/// The setting for an utterance from `source`, and how to name what was said in it.
+fn setting(source: Source) -> (&'static str, &'static str) {
+    match source {
         Source::Message | Source::Edit => (TEXT_SETTING, "what `author` says in `message_text`"),
         Source::Voice => (VOICE_SETTING, "what `speaker` says in `said_now`"),
         Source::Reaction => (REACTION_SETTING, "this `reaction`"),
-    };
+    }
+}
+
+/// The [`AIMED`], [`PUT_DOWN`] and [`MEANNESS`] questions for an utterance from `source`, to ask
+/// in one call.
+pub fn questions(source: Source) -> [(&'static str, Question); 3] {
+    let (setting, it) = setting(source);
     let ask = |q: &str, criteria| noul(format!("{setting} {q}"), Some(criteria));
     [
         (
@@ -130,7 +157,24 @@ pub fn questions(source: Source) -> [(&'static str, Question); 2] {
             PUT_DOWN,
             ask(&format!("Is {it} a put-down?"), (PUT_DOWN_YES, PUT_DOWN_NO)),
         ),
+        meanness_question(source),
     ]
+}
+
+/// The [`MEANNESS`] question alone, for rating utterances judged before it was asked.
+pub fn meanness_question(source: Source) -> (&'static str, Question) {
+    let (setting, it) = setting(source);
+    let question = Question::Score {
+        instructions: format!("{setting} How mean is {it}?"),
+        criteria: MEANNESS_LEVELS.map(String::from).to_vec(),
+    };
+    (MEANNESS, question)
+}
+
+/// How mean, 0 (not at all) to 1 (cruel or hateful), from Jev's place on [`MEANNESS_LEVELS`]
+/// (0 to the top level, between levels when it's torn).
+pub fn meanness(level: f32) -> f32 {
+    (level / (MEANNESS_LEVELS.len() - 1) as f32).clamp(0.0, 1.0)
 }
 
 /// Jev's answers to [`questions`] about one utterance.
@@ -138,6 +182,9 @@ pub fn questions(source: Source) -> [(&'static str, Question); 2] {
 pub struct Verdict {
     pub aimed: f32,
     pub put_down: f32,
+    /// How mean it is, from [`meanness`]. Not part of [`Verdict::score`]: how sure Jev is that
+    /// it's not nice and how mean it is are different things.
+    pub meanness: f32,
 }
 
 impl Verdict {
@@ -290,20 +337,54 @@ mod tests {
 
     #[test]
     fn not_nice_needs_both_aimed_and_a_put_down() {
-        let score = |aimed, put_down| Verdict { aimed, put_down }.score();
+        let score = |aimed, put_down| {
+            Verdict {
+                aimed,
+                put_down,
+                meanness: 1.0,
+            }
+            .score()
+        };
         assert_eq!(score(0.1, 0.95), 0.1);
         assert_eq!(score(0.95, 0.2), 0.2);
         assert_eq!(score(0.9, 0.8), 0.8);
     }
 
     #[test]
-    fn asks_both_questions_about_what_the_source_said() {
+    fn meanness_runs_from_the_bottom_level_to_the_top() {
+        assert_eq!(meanness(0.0), 0.0);
+        assert_eq!(meanness(2.0), 0.5);
+        assert_eq!(meanness(4.0), 1.0);
+        assert_eq!(meanness(1.3), 0.325);
+        assert_eq!(meanness(-1.0), 0.0);
+        assert_eq!(meanness(9.0), 1.0);
+    }
+
+    #[test]
+    fn rating_alone_asks_the_same_meanness_question() {
+        let [.., all] = questions(Source::Voice);
+        let alone = meanness_question(Source::Voice);
+        assert_eq!(
+            serde_json::to_value(&all.1).unwrap(),
+            serde_json::to_value(&alone.1).unwrap()
+        );
+        assert_eq!(alone.0, MEANNESS);
+    }
+
+    #[test]
+    fn asks_all_questions_about_what_the_source_said() {
         let asked = |source| {
             let qs = serde_json::to_value(BTreeMap::from(questions(source))).unwrap();
             let instructions = |id: &str| qs[id]["instructions"].as_str().unwrap().to_owned();
             assert!(qs[AIMED]["criteria"]["true"].is_string());
             assert!(qs[PUT_DOWN]["criteria"]["false"].is_string());
-            [instructions(AIMED), instructions(PUT_DOWN)]
+            assert_eq!(qs[MEANNESS]["type"], "score");
+            assert_eq!(qs[MEANNESS]["criteria"].as_array().unwrap().len(), 5);
+            [
+                instructions(AIMED),
+                instructions(PUT_DOWN),
+                instructions(MEANNESS),
+            ]
         };
         for q in asked(Source::Message) {
             assert!(q.contains("`message_text`"), "{q}");
