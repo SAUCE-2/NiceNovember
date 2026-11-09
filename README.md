@@ -67,7 +67,7 @@ everyone else in the channel is dropped without being transcribed.
 - **Posted publicly:** each hostile message or transcript, quoted in the announce channel, also in
   [shadow mode](#tuning-the-threshold).
 - **Stored in the bot's database:** the activity log (see below), which includes message content
-  and transcripts from the whole server. Treat the database and exports as private.
+  and transcripts from participants. Treat the database and exports as private.
 - **Shown on the [dashboard](#dashboard):** the same log, to whoever has a `/log dashboard` link
   (admins get one, and it works for 7 days).
 
@@ -205,10 +205,11 @@ All settings are environment variables in `.env`:
 
 ## Activity log
 
-Rather than deciding up front what to count, the bot logs everything into the `activity_log` table
-and you work out the stats afterwards. Each entry has the server, the user, the channel, a `kind`,
-whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC timestamp, and a JSON
-`data` payload. Bots aren't logged.
+Rather than deciding up front what to count, the bot logs everything participants do into the
+`activity_log` table and you work out the stats afterwards. Each entry has the server, the user, the
+channel, a `kind`, whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC
+timestamp, and a JSON `data` payload. Members without the participant role and bots aren't logged.
+A `member_update` that gives or takes away the role is logged.
 
 | kind | data |
 |---|---|
