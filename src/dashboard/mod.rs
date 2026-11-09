@@ -7,10 +7,11 @@
 //! | route | what |
 //! |---|---|
 //! | `GET /api/people` | the server's name, and everyone in its log with their totals |
-//! | `GET /api/people/{who}/log?groups=&q=&before=` | one person's entries, newest first, a page at a time |
+//! | `GET /api/people/{who}/log?groups=&q=&before=` | their entries, newest first, a page at a time |
 //! | `GET /api/people/{who}/days` | how many entries (and hostile ones) they have each day |
 //!
-//! `{who}` is a user id, or `server` for server-wide entries.
+//! `{who}` is a user id, or `server` for server-wide entries, or several of those separated by
+//! commas: their entries come mixed together, so a conversation reads back and forth.
 
 pub mod keys;
 pub mod store;
@@ -255,12 +256,20 @@ struct LogParams {
     before: Option<i64>,
 }
 
-fn who(path: &str) -> Result<Who, ApiError> {
-    Who::parse(path).ok_or(ApiError::BadRequest("no such person"))
+/// The people a URL's `{who}` names: at least one, each once.
+fn people_in(path: &str) -> Result<Vec<Who>, ApiError> {
+    let mut people = Vec::new();
+    for part in path.split(',') {
+        let who = Who::parse(part).ok_or(ApiError::BadRequest("no such person"))?;
+        if !people.contains(&who) {
+            people.push(who);
+        }
+    }
+    Ok(people)
 }
 
 impl LogParams {
-    fn into_query(self, who: Who) -> Result<LogQuery, ApiError> {
+    fn into_query(self, people: Vec<Who>) -> Result<LogQuery, ApiError> {
         let groups = self.groups.unwrap_or_default();
         let groups = groups
             .split(',')
@@ -272,7 +281,7 @@ impl LogParams {
             .map(|q| q.trim().to_owned())
             .filter(|q| !q.is_empty());
         Ok(LogQuery {
-            who,
+            people,
             groups,
             text,
             before: self.before,
@@ -288,7 +297,7 @@ async fn person_log(
     Path(path): Path<String>,
     Query(params): Query<LogParams>,
 ) -> Result<Json<Value>, ApiError> {
-    let q = params.into_query(who(&path)?)?;
+    let q = params.into_query(people_in(&path)?)?;
     let mut rows = dash.db.person_log(viewer.guild, &q).await?;
     let more = rows.len() as i64 > PAGE;
     rows.truncate(PAGE as usize);
@@ -301,6 +310,7 @@ fn entry_json(r: &LogRow, channel_name: impl Fn(i64) -> Option<String>) -> Value
     let data: Value = serde_json::from_str(&r.data).unwrap_or(Value::String(r.data.clone()));
     json!({
         "id": r.id,
+        "who": Who::of_row(r.user_id).to_string(),
         "at": r.at,
         "day": r.day,
         "kind": r.kind,
@@ -318,7 +328,10 @@ async fn person_days(
     State(dash): State<Dash>,
     Path(path): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let days = dash.db.person_days(viewer.guild, who(&path)?).await?;
+    let days = dash
+        .db
+        .person_days(viewer.guild, &people_in(&path)?)
+        .await?;
     Ok(Json(json!(days)))
 }
 
@@ -596,6 +609,33 @@ mod tests {
             let (status, body) = get_json(&app, bad, &key).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
             assert!(body["error"].is_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn several_peoples_logs_come_mixed_together_saying_whose_each_is() {
+        let (app, key) = dashboard().await;
+        let (status, body) = get_json(&app, "/api/people/2,1,server/log", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        let whose: Vec<_> = body["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["who"].as_str().unwrap())
+            .collect();
+        assert_eq!(whose, ["server", "2", "1", "1", "1"]);
+
+        let (status, body) = get_json(&app, "/api/people/1,2/days", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!([{"day": "2026-11-05", "n": 4, "hostile": 1}]));
+
+        for bad in [
+            "/api/people/1,al/log",
+            "/api/people/,/log",
+            "/api/people/1,/days",
+        ] {
+            let (status, _) = get_json(&app, bad, &key).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
         }
     }
 

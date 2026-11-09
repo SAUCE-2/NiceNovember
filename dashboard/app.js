@@ -1,8 +1,9 @@
 // The dashboard page: talks to the bot's /api with the key from the `/log dashboard` link, and
-// draws everyone in the log and the chosen person's entries. Wording comes from logs.js.
+// draws everyone in the log and the chosen people's entries, mixed together when there are several.
+// Wording comes from logs.js.
 (function () {
   "use strict";
-  const { GROUPS, describe, pct } = window.NiceLogs;
+  const { GROUPS, combine, describe, pct } = window.NiceLogs;
   const $ = (id) => document.getElementById(id);
   const SVG = "http://www.w3.org/2000/svg";
   const KEY_STORE = "nicenovember-dashboard-key";
@@ -43,7 +44,8 @@
   const state = {
     key: takeKey(),
     people: [],
-    who: new URLSearchParams(location.hash.slice(1)).get("who"),
+    // The ids of the people shown, in the order they were picked.
+    chosen: (new URLSearchParams(location.hash.slice(1)).get("who") || "").split(",").filter(Boolean),
     groups: new Set(),
     q: "",
     lastId: null,
@@ -89,7 +91,9 @@
       ...state.people
         .filter((p) => !find || p.name.toLowerCase().includes(find) || p.id.includes(find))
         .map((p) => el("li", {},
-          el("button", { type: "button", "aria-current": p.id === state.who ? "true" : null, onclick: () => choose(p.id) },
+          el("input", { type: "checkbox", checked: state.chosen.includes(p.id), title: "Show them too",
+            "aria-label": `Show ${p.name} too`, onchange: () => toggle(p.id) }),
+          el("button", { type: "button", "aria-current": state.chosen.includes(p.id) ? "true" : null, onclick: () => choose([p.id]) },
             el("span", { class: "who" }, p.name),
             el("span", { class: "count" }, num(p.total)),
             el("span", { class: "sub" },
@@ -100,17 +104,35 @@
     if (!list.children.length) list.append(el("li", { class: "muted" }, "Nobody matches."));
   }
 
-  function choose(id) {
-    state.who = id;
-    history.replaceState(null, "", `${location.pathname}#who=${encodeURIComponent(id)}`);
+  function choose(ids) {
+    state.chosen = ids;
+    history.replaceState(null, "", `${location.pathname}#who=${ids.map(encodeURIComponent).join(",")}`);
     renderPeople();
     showPerson();
   }
 
-  // ---- one person ----
+  /** Add someone to the people shown, or take them out (but never the last one). */
+  function toggle(id) {
+    const rest = state.chosen.filter((c) => c !== id);
+    if (rest.length === state.chosen.length) choose([...state.chosen, id]);
+    else if (rest.length) choose(rest);
+    else renderPeople();
+  }
 
-  function person() {
-    return state.people.find((p) => p.id === state.who);
+  // ---- the people shown ----
+
+  function chosenPeople() {
+    return state.chosen.map((id) => state.people.find((p) => p.id === id)).filter(Boolean);
+  }
+
+  /** The path part naming the people shown, for the API. */
+  const whoPath = () => state.chosen.map(encodeURIComponent).join(",");
+
+  /** A person's name in the colour that marks their entries. */
+  function speaker(id) {
+    const i = state.chosen.indexOf(id);
+    const p = state.people.find((q) => q.id === id);
+    return el("span", { class: `speaker c${i % 6}` }, p ? p.name : id);
   }
 
   function tile(label, value, bad) {
@@ -118,14 +140,26 @@
       el("div", { class: "label" }, label), el("div", { class: "value" }, value));
   }
 
-  async function showPerson() {
-    const p = person();
-    if (!p) return;
+  function showHead(shown) {
+    if (shown.length > 1) {
+      const names = shown.flatMap((p, i) => [i ? (i === shown.length - 1 ? " & " : ", ") : "", speaker(p.id)]);
+      $("name").replaceChildren(...names);
+      $("seen").textContent = "Everything they did, mixed together, newest first. Tick or untick people on the left.";
+      return combine(shown);
+    }
+    const p = shown[0];
     const role = p.participant == null ? null : p.participant ? "Participant" : "Not a participant";
     $("name").replaceChildren(p.name, role ? el("span", { class: "chip" }, role) : null);
     $("seen").textContent = p.id === "server"
       ? "Entries about the server, not a person: the bot joining and leaving voice, bulk deletes."
       : `First seen ${when(p.first)} · last seen ${when(p.last)} · id ${p.id}`;
+    return p;
+  }
+
+  async function showPerson() {
+    const shown = chosenPeople();
+    if (!shown.length) return;
+    const p = showHead(shown);
     $("tiles").replaceChildren(
       tile("Entries", num(p.total)),
       tile("Said", num(p.said)),
@@ -135,10 +169,10 @@
       tile("Timeouts", num(p.timeouts), p.timeouts > 0),
     );
     loadLog();
-    const who = state.who;
+    const who = whoPath();
     try {
-      const days = await api(`/api/people/${encodeURIComponent(who)}/days`);
-      if (state.who !== who) return;
+      const days = await api(`/api/people/${who}/days`);
+      if (whoPath() !== who) return;
       state.days = fillDays(days);
       drawChart();
     } catch (e) {
@@ -243,6 +277,7 @@
     return el("li", { class: bad ? "bad" : null },
       el("time", { datetime: e.at }, when(e.at)),
       el("div", { class: "what" },
+        state.chosen.length > 1 ? speaker(e.who) : null,
         bad ? el("span", { class: "flag" }, "⚠ ") : null,
         el("span", { class: "kind" }, e.kind),
         e.channel ? el("span", { class: "where" }, ` in #${e.channel}`) : e.channel_id ? el("span", { class: "where" }, ` in channel ${e.channel_id}`) : null,
@@ -265,7 +300,7 @@
     if (state.q) params.set("q", state.q);
     if (state.lastId != null) params.set("before", state.lastId);
     try {
-      const page = await api(`/api/people/${encodeURIComponent(state.who)}/log?${params}`);
+      const page = await api(`/api/people/${whoPath()}/log?${params}`);
       if (asked !== state.asked) return;
       $("log").append(...page.entries.map(entryItem));
       if (page.entries.length) state.lastId = page.entries[page.entries.length - 1].id;
@@ -301,12 +336,13 @@
     $("guild").textContent = body.guild;
     document.title = `${body.guild} · NiceNovember Logs`;
     state.people = body.people;
-    if (!person()) state.who = state.people.length ? state.people[0].id : null;
+    state.chosen = chosenPeople().map((p) => p.id);
+    if (!state.chosen.length && state.people.length) state.chosen = [state.people[0].id];
     $("notice").hidden = true;
     $("app").hidden = false;
     $("refresh").hidden = false;
     renderPeople();
-    if (state.who) showPerson();
+    if (state.chosen.length) showPerson();
     else notice("Nothing has been logged yet.");
   }
 

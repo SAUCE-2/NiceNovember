@@ -92,7 +92,20 @@
     }
   }
 
-  const api = { GROUPS, describe, duration, pct };
+  /** Several people's totals as one: sums, the hostile average weighted by times judged. */
+  function combine(people) {
+    const sum = (k) => people.reduce((n, p) => n + p[k], 0);
+    const judged = sum("judged");
+    const scored = people.reduce((n, p) => n + (p.avg_score || 0) * p.judged, 0);
+    const ats = (k) => people.map((p) => p[k]).sort();
+    return {
+      total: sum("total"), said: sum("said"), judged, hostile: sum("hostile"), timeouts: sum("timeouts"),
+      avg_score: judged ? scored / judged : null,
+      first: ats("first")[0], last: ats("last").at(-1),
+    };
+  }
+
+  const api = { GROUPS, combine, describe, duration, pct };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.NiceLogs = api;
 })(this);
