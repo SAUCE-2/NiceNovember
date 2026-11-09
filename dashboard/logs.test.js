@@ -39,3 +39,22 @@ test("durations and percentages", () => {
 test("the groups match the ones the server sorts kinds into", () => {
   assert.deepEqual(logs.GROUPS.map(([g]) => g), ["said", "moderation", "voice", "presence", "other"]);
 });
+
+test("several people's totals add up, the hostile average weighted by how often each was judged", () => {
+  const al = { id: "1", name: "Al", total: 10, said: 4, judged: 3, avg_score: 0.75, hostile: 1, timeouts: 1,
+    first: "2026-11-02T00:00:00Z", last: "2026-11-04T00:00:00Z" };
+  const bo = { id: "2", name: "Bo", total: 5, said: 2, judged: 1, avg_score: 0.25, hostile: 0, timeouts: 0,
+    first: "2026-11-01T00:00:00Z", last: "2026-11-03T00:00:00Z" };
+  const cy = { id: "3", name: "Cy", total: 1, said: 0, judged: 0, avg_score: null, hostile: 0, timeouts: 0,
+    first: "2026-11-05T00:00:00Z", last: "2026-11-05T00:00:00Z" };
+  const all = logs.combine([al, bo, cy]);
+  assert.equal(all.total, 16);
+  assert.equal(all.said, 6);
+  assert.equal(all.judged, 4);
+  assert.equal(all.avg_score, 0.625);
+  assert.equal(all.hostile, 1);
+  assert.equal(all.timeouts, 1);
+  assert.equal(all.first, "2026-11-01T00:00:00Z");
+  assert.equal(all.last, "2026-11-05T00:00:00Z");
+  assert.equal(logs.combine([cy]).avg_score, null);
+});
