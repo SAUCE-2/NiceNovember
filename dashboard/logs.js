@@ -66,9 +66,9 @@
       case "reaction_remove": return `Removed reaction ${emoji(d.emoji)}`;
       case "thread_create": return `Started thread ${d.name || ""}`.trim();
       case "judged":
-        return `${pct(d.score || 0)} sure it's hostile${d.source ? ` (${d.source})` : ""}: ${d.said || ""}`;
+        return `Scored ${pct(d.score || 0)}${d.source ? ` (${d.source})` : ""}: ${d.said || ""}`;
       case "judge_failed": return `Couldn't judge: ${d.said || ""}`;
-      case "hostile": return `Not nice, ${pct(d.score || 0)} sure: ${d.said || ""}`;
+      case "hostile": return `Not nice, scored ${pct(d.score || 0)}: ${d.said || ""}`;
       case "timed_out": return `Timed out for ${duration(d.secs || 0)}${d.muted ? ", muted in VC" : ""}`;
       case "timeout_released": return "Timeout ended";
       case "timeout_message": return `Message deleted (timed out): ${d.content || ""}`;

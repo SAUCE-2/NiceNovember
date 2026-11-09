@@ -177,20 +177,28 @@ pub fn meanness(level: f32) -> f32 {
     (level / (MEANNESS_LEVELS.len() - 1) as f32).clamp(0.0, 1.0)
 }
 
+/// How much meanness counts in [`Verdict::score`], against how sure Jev is that it's both aimed
+/// and a put-down.
+const MEANNESS_WEIGHT: f32 = 0.1;
+
 /// Jev's answers to [`questions`] about one utterance.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Verdict {
     pub aimed: f32,
     pub put_down: f32,
-    /// How mean it is, from [`meanness`]. Not part of [`Verdict::score`]: how sure Jev is that
-    /// it's not nice and how mean it is are different things.
+    /// How mean it is, from [`meanness`].
     pub meanness: f32,
 }
 
 impl Verdict {
-    /// How not nice it is: only as sure as Jev is of both, so either one being low clears it.
+    /// How not nice it is, 0 to 1: how sure Jev is of both aimed and put-down (the lower of the
+    /// two, so either one being low clears it), weighed against how mean it is, so a sure,
+    /// aimed put-down is high even when it's barely mean, and only clears when it isn't mean
+    /// at all.
     pub fn score(self) -> f32 {
-        self.aimed.min(self.put_down)
+        let both = self.aimed.min(self.put_down).clamp(0.0, 1.0);
+        let meanness = self.meanness.clamp(0.0, 1.0);
+        both.powf(1.0 - MEANNESS_WEIGHT) * meanness.powf(MEANNESS_WEIGHT)
     }
 }
 
@@ -246,9 +254,8 @@ fn quote_in_context(u: &Utterance) -> String {
     before.chain([own]).collect::<Vec<_>>().join("\n")
 }
 
-/// The public call-out posted to the announce channel, with Jev's score as how sure it is that
-/// this was hostile (a probability, not how hostile it was). In shadow mode it says nobody was
-/// timed out.
+/// The public call-out posted to the announce channel, with its [`Verdict::score`]. In shadow
+/// mode it says nobody was timed out.
 pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
     let (did, quoted) = match u.source {
         Source::Voice => (format!("said in 🔊 <#{}>", u.channel), quote_in_context(u)),
@@ -262,7 +269,7 @@ pub fn announcement(u: &Utterance, score: f32, shadow: bool) -> String {
             quote(u.in_reply_to.as_deref().unwrap_or_default()),
         ),
     };
-    let percent = format!("{:.0}% sure it's hostile", score * 100.0);
+    let percent = format!("scored {:.0}%", score * 100.0);
     let verdict = if shadow {
         format!("👻 **Not nice** ({percent}, shadow mode: not timed out)")
     } else {
@@ -340,18 +347,29 @@ mod tests {
     }
 
     #[test]
-    fn not_nice_needs_both_aimed_and_a_put_down() {
-        let score = |aimed, put_down| {
-            Verdict {
+    fn not_nice_weighs_aimed_put_down_and_meanness() {
+        let score = |aimed, put_down, meanness| {
+            let s = Verdict {
                 aimed,
                 put_down,
-                meanness: 1.0,
+                meanness,
             }
-            .score()
+            .score();
+            (s * 100.0).round() / 100.0
         };
-        assert_eq!(score(0.1, 0.95), 0.1);
-        assert_eq!(score(0.95, 0.2), 0.2);
-        assert_eq!(score(0.9, 0.8), 0.8);
+        // Either answer being low clears it, however mean.
+        assert_eq!(score(0.1, 0.95, 1.0), 0.13);
+        assert_eq!(score(0.95, 0.4, 1.0), 0.44);
+        // An aimed put-down Jev is sure of is not nice even when it's barely mean; only Jev
+        // finding it not mean at all clears it.
+        assert_eq!(score(1.0, 1.0, 0.1), 0.79);
+        assert_eq!(score(0.9, 0.9, 0.1), 0.72);
+        assert_eq!(score(0.9, 0.9, 0.31), 0.81);
+        assert_eq!(score(1.0, 1.0, 0.02), 0.68);
+        // Unsure it's a put-down still clears.
+        assert_eq!(score(0.82, 0.62, 0.315), 0.58);
+        assert_eq!(score(1.0, 1.0, 1.0), 1.0);
+        assert_eq!(score(1.0, 1.0, 0.0), 0.0);
     }
 
     #[test]
@@ -417,7 +435,7 @@ mod tests {
     fn announcements_say_where() {
         assert_eq!(
             announcement(&utterance(Source::Voice, "shut up"), 0.874, false),
-            "🚫 **Not nice!** (87% sure it's hostile) <@7> said in 🔊 <#9>:\n> Sam: **shut up**"
+            "🚫 **Not nice!** (scored 87%) <@7> said in 🔊 <#9>:\n> Sam: **shut up**"
         );
         let say = |source| announcement(&utterance(source, "x"), 0.7, false);
         assert!(say(Source::Message).contains("said in <#9>:"));
@@ -426,7 +444,7 @@ mod tests {
         r.in_reply_to = Some("I won".into());
         assert_eq!(
             announcement(&r, 1.0, false),
-            "🚫 **Not nice!** (100% sure it's hostile) <@7> reacted 🖕 in <#9> to:\n> I won"
+            "🚫 **Not nice!** (scored 100%) <@7> reacted 🖕 in <#9> to:\n> I won"
         );
     }
 
@@ -434,7 +452,7 @@ mod tests {
     fn shadow_announcements_say_nobody_was_timed_out() {
         assert_eq!(
             announcement(&utterance(Source::Message, "you suck"), 0.716, true),
-            "👻 **Not nice** (72% sure it's hostile, shadow mode: not timed out) <@7> said in <#9>:\n\
+            "👻 **Not nice** (scored 72%, shadow mode: not timed out) <@7> said in <#9>:\n\
              > you suck"
         );
     }

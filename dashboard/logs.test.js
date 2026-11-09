@@ -13,8 +13,8 @@ test("describes each kind in a line a person can read", () => {
   assert.equal(d("message_delete_bulk", { message_ids: ["1", "2"] }), "Bulk-deleted 2 messages");
   assert.equal(d("heard", { text: "hi there", audio_ms: 1500 }), "hi there (1.5s)");
   assert.equal(d("judged", { source: "voice", said: "you're bad", score: 0.87, hostile: true }),
-    "87% sure it's hostile (voice): you're bad");
-  assert.equal(d("hostile", { said: "ugh", score: 0.9, announced: true }), "Not nice, 90% sure: ugh");
+    "Scored 87% (voice): you're bad");
+  assert.equal(d("hostile", { said: "ugh", score: 0.9, announced: true }), "Not nice, scored 90%: ugh");
   assert.equal(d("timed_out", { secs: 10, muted: true }), "Timed out for 10s, muted in VC");
   assert.equal(d("reaction_add", { emoji: { name: "😂" } }), "Reacted 😂");
   assert.equal(d("reaction_add", { emoji: { name: "pog", id: "1" } }), "Reacted :pog:");
