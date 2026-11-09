@@ -26,13 +26,26 @@ impl Who {
         }
     }
 
-    /// The `user_id` column's value: NULL for server-wide entries.
-    fn column(self) -> Option<i64> {
-        match self {
-            Self::User(u) => Some(u as i64),
-            Self::Server => None,
-        }
+    /// Whose a row is, from its `user_id` column: NULL for server-wide entries.
+    pub fn of_row(user_id: Option<i64>) -> Self {
+        user_id.map_or(Self::Server, |u| Self::User(u as u64))
     }
+}
+
+/// Several people as SQL parameters: (their user ids as a JSON array, whether server-wide is one).
+/// The queries match them with `user_id IN (SELECT value FROM json_each(?)) OR (? AND user_id IS NULL)`.
+fn people_params(people: &[Who]) -> (String, bool) {
+    let users: Vec<i64> = people
+        .iter()
+        .filter_map(|w| match w {
+            Who::User(u) => Some(*u as i64),
+            Who::Server => None,
+        })
+        .collect();
+    (
+        Value::from(users).to_string(),
+        people.contains(&Who::Server),
+    )
 }
 
 impl fmt::Display for Who {
@@ -144,10 +157,11 @@ impl Group {
     }
 }
 
-/// Which of one person's entries to show, newest first.
+/// Which of some people's entries to show, newest first, all of them mixed together.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogQuery {
-    pub who: Who,
+    /// Whose entries; none matches nothing.
+    pub people: Vec<Who>,
     /// Only these groups; empty means all of them.
     pub groups: Vec<Group>,
     /// Only entries whose kind or payload contains this, ignoring ASCII case.
@@ -195,7 +209,7 @@ pub struct Person {
 
 impl Person {
     pub fn who(&self) -> Who {
-        self.user_id.map_or(Who::Server, |u| Who::User(u as u64))
+        Who::of_row(self.user_id)
     }
 }
 
@@ -270,12 +284,14 @@ impl Db {
             .collect())
     }
 
-    /// One person's entries, newest first, filtered and paged by `q`.
+    /// Some people's entries, newest first, filtered and paged by `q`.
     pub async fn person_log(&self, guild_id: u64, q: &LogQuery) -> Result<Vec<LogRow>> {
         let (all, wanted, other, known) = group_params(&q.groups);
+        let (users, server) = people_params(&q.people);
         Ok(sqlx::query_as(
             "SELECT id, user_id, channel_id, kind, participant, data, day, at FROM activity_log
-             WHERE guild_id = ?1 AND user_id IS ?2
+             WHERE guild_id = ?1
+               AND (user_id IN (SELECT value FROM json_each(?2)) OR (?10 AND user_id IS NULL))
                AND (?3 IS NULL OR id < ?3)
                AND (?4 OR kind IN (SELECT value FROM json_each(?5))
                     OR (?6 AND kind NOT IN (SELECT value FROM json_each(?7))))
@@ -283,7 +299,7 @@ impl Db {
              ORDER BY id DESC LIMIT ?9",
         )
         .bind(guild_id as i64)
-        .bind(q.who.column())
+        .bind(users)
         .bind(q.before)
         .bind(all)
         .bind(wanted)
@@ -291,18 +307,23 @@ impl Db {
         .bind(known)
         .bind(q.text.as_deref())
         .bind(q.limit)
+        .bind(server)
         .fetch_all(&self.0)
         .await?)
     }
 
-    /// How many entries one person has per day, oldest day first.
-    pub async fn person_days(&self, guild_id: u64, who: Who) -> Result<Vec<DayCount>> {
+    /// How many entries some people have per day between them, oldest day first.
+    pub async fn person_days(&self, guild_id: u64, people: &[Who]) -> Result<Vec<DayCount>> {
+        let (users, server) = people_params(people);
         Ok(sqlx::query_as(
             "SELECT day, COUNT(*) AS n, SUM(kind = 'hostile') AS hostile FROM activity_log
-             WHERE guild_id = ? AND user_id IS ? GROUP BY day ORDER BY day",
+             WHERE guild_id = ?1
+               AND (user_id IN (SELECT value FROM json_each(?2)) OR (?3 AND user_id IS NULL))
+             GROUP BY day ORDER BY day",
         )
         .bind(guild_id as i64)
-        .bind(who.column())
+        .bind(users)
+        .bind(server)
         .fetch_all(&self.0)
         .await?)
     }
@@ -331,7 +352,7 @@ mod tests {
 
     fn query(who: Who) -> LogQuery {
         LogQuery {
-            who,
+            people: vec![who],
             groups: vec![],
             text: None,
             before: None,
@@ -553,6 +574,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_log_of_several_people_interleaves_them_newest_first() {
+        let db = db_with(&[
+            (
+                1,
+                Some(1),
+                "message",
+                "2026-11-01",
+                json!({"content": "you there?"}),
+            ),
+            (
+                1,
+                Some(2),
+                "message",
+                "2026-11-01",
+                json!({"content": "yep"}),
+            ),
+            (
+                1,
+                Some(3),
+                "message",
+                "2026-11-01",
+                json!({"content": "not asked"}),
+            ),
+            (
+                1,
+                Some(1),
+                "message",
+                "2026-11-01",
+                json!({"content": "cool"}),
+            ),
+            (1, None, "monitor_left", "2026-11-01", json!({})),
+        ])
+        .await;
+        let ids = |people: Vec<Who>| {
+            let db = db.clone();
+            async move {
+                let q = LogQuery {
+                    people,
+                    ..query(Who::User(1))
+                };
+                let rows = db.person_log(1, &q).await.unwrap();
+                rows.into_iter().map(|r| r.id).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(ids(vec![Who::User(1), Who::User(2)]).await, [4, 2, 1]);
+        assert_eq!(ids(vec![Who::User(2), Who::Server]).await, [5, 2]);
+        assert!(ids(vec![]).await.is_empty());
+        assert_eq!(
+            db.person_days(1, &[Who::User(1), Who::User(2)])
+                .await
+                .unwrap(),
+            [DayCount {
+                day: "2026-11-01".into(),
+                n: 3,
+                hostile: 0
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn person_log_pages_with_before() {
         let entries: Vec<_> = (0..5)
             .map(|i| (1, Some(1), "message", "2026-11-01", json!({ "n": i })))
@@ -592,11 +673,11 @@ mod tests {
             hostile,
         };
         assert_eq!(
-            db.person_days(1, Who::User(1)).await.unwrap(),
+            db.person_days(1, &[Who::User(1)]).await.unwrap(),
             [day("2026-11-01", 1, 0), day("2026-11-02", 2, 1)]
         );
         assert_eq!(
-            db.person_days(1, Who::Server).await.unwrap(),
+            db.person_days(1, &[Who::Server]).await.unwrap(),
             [day("2026-11-03", 1, 0)]
         );
     }
