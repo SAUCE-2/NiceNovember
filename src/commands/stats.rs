@@ -15,7 +15,7 @@ fn guild(ctx: Ctx<'_>) -> Result<serenity::GuildId> {
     ctx.guild_id().context("use this in a server")
 }
 
-/// Top Trumps card for a user: meanest/nicest lines and hostility per source, plus timeouts.
+/// Top Trumps card for a user: meanest/nicest lines and not niceness per source, plus timeouts.
 #[poise::command(slash_command, guild_only)]
 pub async fn stats(
     ctx: Ctx<'_>,
@@ -178,14 +178,11 @@ fn format_user_card(s: &UserStats, sources: &[SourceStats]) -> String {
         text.push_str("Nothing judged yet.\n\n");
     }
     for src in sources {
-        let avg = src
-            .avg_score
-            .map(|v| format!("{v:.2}"))
-            .unwrap_or_else(|| "—".into());
+        let avg = src.avg_meanness.map_or_else(|| "—".into(), percent);
         let _ = write!(
             text,
             "**{}**\nMeanest thing: {}\nFriendliest thing: {}\n\
-             Hostility: avg {avg} · {} hostile of {} judged\n\n",
+             Not niceness: avg {avg} · {} not nice of {} judged\n\n",
             src.source,
             format_highlight(src.meanest.as_ref()),
             format_highlight(src.friendliest.as_ref()),
@@ -207,7 +204,15 @@ fn format_highlight(h: Option<&SaidHighlight>) -> String {
         return "—".into();
     };
     let said: String = h.said.chars().take(100).collect();
-    format!("\"{said}\" ({:.2})", h.score)
+    match h.meanness {
+        Some(m) => format!("\"{said}\" ({} not nice)", percent(m)),
+        None => format!("\"{said}\""),
+    }
+}
+
+/// Meanness (0 to 1) as people read it: a percentage of not niceness.
+fn percent(meanness: f64) -> String {
+    format!("{:.0}%", meanness * 100.0)
 }
 
 fn fmt_secs(secs: i64) -> String {
@@ -289,25 +294,25 @@ mod tests {
             timed_out: 2,
             timeout_secs: 180,
         };
-        let said = |said: &str, score| {
+        let said = |said: &str, meanness| {
             Some(SaidHighlight {
                 said: said.into(),
-                score,
+                meanness,
             })
         };
         let sources = [
             SourceStats {
                 source: "voice".into(),
                 judged: 3,
-                avg_score: Some(0.42),
+                avg_meanness: Some(0.42),
                 hostile: 1,
-                meanest: said("you're the worst", 0.9),
-                friendliest: said("have a nice day", 0.1),
+                meanest: said("you're the worst", Some(0.75)),
+                friendliest: said("have a nice day", None),
             },
             SourceStats {
                 source: "edit".into(),
                 judged: 0,
-                avg_score: None,
+                avg_meanness: None,
                 hostile: 0,
                 meanest: None,
                 friendliest: None,
@@ -316,13 +321,13 @@ mod tests {
         assert_eq!(
             format_user_card(&s, &sources),
             "**voice**\n\
-             Meanest thing: \"you're the worst\" (0.90)\n\
-             Friendliest thing: \"have a nice day\" (0.10)\n\
-             Hostility: avg 0.42 · 1 hostile of 3 judged\n\n\
+             Meanest thing: \"you're the worst\" (75% not nice)\n\
+             Friendliest thing: \"have a nice day\"\n\
+             Not niceness: avg 42% · 1 not nice of 3 judged\n\n\
              **edit**\n\
              Meanest thing: —\n\
              Friendliest thing: —\n\
-             Hostility: avg — · 0 hostile of 0 judged\n\n\
+             Not niceness: avg — · 0 not nice of 0 judged\n\n\
              **Timeouts:** 2 (3m)"
         );
     }

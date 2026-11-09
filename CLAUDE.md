@@ -39,6 +39,9 @@ since CI runs on PRs and every push to `main` publishes the image the bot auto-u
   a person or group, rather than a thing, nobody, or a word just mentioned) and **put-down** (is
   it an insult, mockery, sarcasm, dismissal or the like, even as a joke). Its score is the lower
   of the two, so it's only not nice when it's both.
+- **Meanness** (in the code; "not niceness" to users): how mean an utterance was, 0 (friendly or neutral) to 1 (cruel or hateful), from
+  a third Jev answer asked with the verdict. Shown as a percentage on `/stats` cards. Separate from the
+  verdict: the score says how sure Jev is that it's not nice, meanness says how bad it was.
 - **Conversation**: what was said just before an utterance in the same chat channel or voice call,
   each line with who said it and when. Messages, edits and voice lines are judged with it.
 - **Call**: the voice moment an utterance was said in: the speaker, who's in the channel, and the

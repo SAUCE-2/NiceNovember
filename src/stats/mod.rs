@@ -28,13 +28,14 @@ pub mod kind {
     /// Whisper transcribed a participant in the monitored VC:
     /// `{text, raw, audio_ms, transcribe_ms}`.
     pub const HEARD: &str = "heard";
-    /// Jev judged an utterance: `{source, said, score, aimed, put_down, hostile, threshold,
-    /// jev_ms, images, message_id}` (`score` is the lower of `aimed` and `put_down`).
+    /// Jev judged an utterance: `{source, said, score, aimed, put_down, meanness, hostile,
+    /// threshold, jev_ms, images, message_id}` (`score` is the lower of `aimed` and `put_down`;
+    /// `meanness` is 0 to 1, added afterwards to entries from before it was asked).
     pub const JUDGED: &str = "judged";
     /// Jev couldn't judge an utterance (not configured, or the call failed): `{source, said}`.
     pub const JUDGE_FAILED: &str = "judge_failed";
-    /// An utterance was hostile: `{source, said, score, aimed, put_down, threshold, message_id,
-    /// muted, timeout_error, announced}`.
+    /// An utterance was hostile: `{source, said, score, aimed, put_down, meanness, threshold,
+    /// message_id, muted, timeout_error, announced}`.
     pub const HOSTILE: &str = "hostile";
     /// Someone was timed out: `{secs, until, reason, muted}` (`muted`: server-muted and deafened).
     pub const TIMED_OUT: &str = "timed_out";
@@ -119,6 +120,17 @@ pub struct LogRow {
     pub at: String,
 }
 
+/// A judged log entry with no meanness yet.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct UnratedRow {
+    pub id: i64,
+    pub guild_id: i64,
+    pub user_id: Option<i64>,
+    pub channel_id: Option<i64>,
+    pub data: String,
+    pub at: String,
+}
+
 /// Moderation totals, from the log.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sqlx::FromRow)]
 pub struct ModerationStats {
@@ -149,12 +161,13 @@ pub struct UserStats {
 pub struct SourceStats {
     pub source: String,
     pub judged: i64,
-    pub avg_score: Option<f64>,
+    /// Average meanness, 0 to 1, of the judged utterances rated so far.
+    pub avg_meanness: Option<f64>,
     pub hostile: i64,
-    /// Highest-scored judged utterance from this source.
+    /// Meanest judged utterance from this source.
     #[sqlx(skip)]
     pub meanest: Option<SaidHighlight>,
-    /// Lowest-scored judged utterance from this source.
+    /// Least mean judged utterance from this source.
     #[sqlx(skip)]
     pub friendliest: Option<SaidHighlight>,
 }
@@ -163,16 +176,17 @@ pub struct SourceStats {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SaidHighlight {
     pub said: String,
-    pub score: f64,
+    /// How mean it was, 0 to 1; `None` until it's been rated.
+    pub meanness: Option<f64>,
 }
 
 impl SaidHighlight {
-    /// Pull `said` / `score` out of a judged log row's JSON.
+    /// Pull `said` / `meanness` out of a judged log row's JSON.
     pub fn from_judged_data(data: &str) -> Option<Self> {
         let d: Value = serde_json::from_str(data).ok()?;
         let said = d.get("said")?.as_str()?.to_owned();
-        let score = d.get("score")?.as_f64()?;
-        Some(Self { said, score })
+        let meanness = d.get("meanness").and_then(Value::as_f64);
+        Some(Self { said, meanness })
     }
 }
 
@@ -250,7 +264,8 @@ impl Db {
             source_sql!(),
             " AS source,
                 SUM(kind = 'judged') AS judged,
-                AVG(CASE WHEN kind = 'judged' THEN json_extract(data, '$.score') END) AS avg_score,
+                AVG(CASE WHEN kind = 'judged' THEN json_extract(data, '$.meanness') END)
+                    AS avg_meanness,
                 SUM(kind = 'hostile') AS hostile
              FROM activity_log
              WHERE guild_id = ? AND user_id = ? AND kind IN ('judged', 'hostile')
@@ -262,44 +277,82 @@ impl Db {
         .await?;
         for s in &mut sources {
             s.meanest = self
-                .judged_by_score(guild_id, user_id, &s.source, true)
+                .judged_by_meanness(guild_id, user_id, &s.source, true)
                 .await?;
             s.friendliest = self
-                .judged_by_score(guild_id, user_id, &s.source, false)
+                .judged_by_meanness(guild_id, user_id, &s.source, false)
                 .await?;
         }
         Ok(sources)
     }
 
-    async fn judged_by_score(
+    /// The meanest (or least mean) judged utterance, rated ones first, ties going to Jev's score
+    /// and then the latest.
+    async fn judged_by_meanness(
         &self,
         guild_id: u64,
         user_id: u64,
         source: &str,
-        highest: bool,
+        meanest: bool,
     ) -> Result<Option<SaidHighlight>> {
-        let sql = if highest {
-            concat!(
-                "SELECT data FROM activity_log
-                 WHERE guild_id = ? AND user_id = ? AND kind = 'judged' AND ",
-                source_sql!(),
-                " = ? ORDER BY json_extract(data, '$.score') DESC, id DESC LIMIT 1"
-            )
-        } else {
-            concat!(
-                "SELECT data FROM activity_log
-                 WHERE guild_id = ? AND user_id = ? AND kind = 'judged' AND ",
-                source_sql!(),
-                " = ? ORDER BY json_extract(data, '$.score') ASC, id DESC LIMIT 1"
-            )
-        };
-        let row: Option<(String,)> = sqlx::query_as(sql)
-            .bind(guild_id as i64)
-            .bind(user_id as i64)
-            .bind(source)
-            .fetch_optional(&self.0)
-            .await?;
+        let row: Option<(String,)> = sqlx::query_as(concat!(
+            "SELECT data FROM activity_log
+             WHERE guild_id = ? AND user_id = ? AND kind = 'judged' AND ",
+            source_sql!(),
+            " = ? ORDER BY json_extract(data, '$.meanness') IS NULL,
+                json_extract(data, '$.meanness') * ?4, json_extract(data, '$.score') * ?4, id DESC
+             LIMIT 1"
+        ))
+        .bind(guild_id as i64)
+        .bind(user_id as i64)
+        .bind(source)
+        .bind(if meanest { -1 } else { 1 })
+        .fetch_optional(&self.0)
+        .await?;
         Ok(row.and_then(|(data,)| SaidHighlight::from_judged_data(&data)))
+    }
+
+    /// Judged utterances from before meanness was asked, oldest first, to rate now.
+    pub async fn unrated(&self) -> Result<Vec<UnratedRow>> {
+        Ok(sqlx::query_as(
+            "SELECT id, guild_id, user_id, channel_id, data, at FROM activity_log
+             WHERE kind = 'judged' AND json_extract(data, '$.meanness') IS NULL ORDER BY id",
+        )
+        .fetch_all(&self.0)
+        .await?)
+    }
+
+    /// Add a judged utterance's meanness to its log entry.
+    pub async fn set_meanness(&self, id: i64, meanness: f32) -> Result<()> {
+        sqlx::query("UPDATE activity_log SET data = json_set(data, '$.meanness', ?) WHERE id = ?")
+            .bind(meanness)
+            .bind(id)
+            .execute(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// What was heard in a voice channel before log entry `before`, from `since` on, newest first,
+    /// as (who, what, when). Empty transcripts are left out.
+    pub async fn heard_before(
+        &self,
+        guild_id: u64,
+        channel_id: u64,
+        before: i64,
+        since: &str,
+    ) -> Result<Vec<(Option<i64>, String, String)>> {
+        Ok(sqlx::query_as(
+            "SELECT user_id, json_extract(data, '$.text'), at FROM activity_log
+             WHERE guild_id = ? AND channel_id = ? AND kind = 'heard' AND id < ? AND at >= ?
+                AND json_extract(data, '$.text') != ''
+             ORDER BY id DESC LIMIT 50",
+        )
+        .bind(guild_id as i64)
+        .bind(channel_id as i64)
+        .bind(before)
+        .bind(since)
+        .fetch_all(&self.0)
+        .await?)
     }
 
     /// Moderation counts for `/status`, in one guild. Stats never cross guilds.
@@ -523,27 +576,24 @@ mod tests {
         let db = Db::connect("sqlite::memory:").await.unwrap();
         let day = d("2026-11-06");
         assert_eq!(db.user_stats(1, 7).await.unwrap(), UserStats::default());
+        let judged = |said: &str, score: f64, meanness: Option<f64>, source: &str| {
+            let mut d = json!({"said": said, "score": score, "source": source});
+            if let Some(m) = meanness {
+                d["meanness"] = json!(m);
+            }
+            Log::new(kind::JUDGED, d).user(UserId::new(7))
+        };
         let entries = [
             Log::new("message", json!({})).user(UserId::new(7)),
             Log::new("message", json!({})).user(UserId::new(7)),
             Log::new("reaction_add", json!({})).user(UserId::new(7)),
             Log::new(kind::HEARD, json!({"text": "yo", "audio_ms": 1500})).user(UserId::new(7)),
             Log::new(kind::HEARD, json!({"text": "hey", "audio_ms": 500})).user(UserId::new(7)),
-            Log::new(
-                kind::JUDGED,
-                json!({"said": "have a nice day", "score": 0.1, "source": "message"}),
-            )
-            .user(UserId::new(7)),
-            Log::new(
-                kind::JUDGED,
-                json!({"said": "you're the worst", "score": 0.9, "source": "voice"}),
-            )
-            .user(UserId::new(7)),
-            Log::new(
-                kind::JUDGED,
-                json!({"said": "meh", "score": 0.5, "source": "message"}),
-            )
-            .user(UserId::new(7)),
+            judged("have a nice day", 0.1, Some(0.0), "message"),
+            judged("you're the worst", 0.9, Some(0.75), "voice"),
+            judged("meh", 0.5, Some(0.25), "message"),
+            judged("ok genius", 0.3, Some(0.5), "message"),
+            judged("not rated yet", 0.95, None, "message"),
             Log::new(
                 kind::HOSTILE,
                 json!({"said": "you're the worst", "score": 0.9, "source": "voice"}),
@@ -567,13 +617,17 @@ mod tests {
         let sources: Vec<_> = by_source.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, ["message", "voice"], "most judged first");
         let (message, voice) = (&by_source[0], &by_source[1]);
-        assert_eq!((message.judged, message.hostile), (2, 0));
-        assert!((message.avg_score.unwrap() - 0.3).abs() < 1e-9);
-        assert_eq!(said(&message.meanest), "meh");
+        assert_eq!((message.judged, message.hostile), (4, 0));
+        assert!((message.avg_meanness.unwrap() - 0.25).abs() < 1e-9);
+        assert_eq!(
+            said(&message.meanest),
+            "ok genius",
+            "by meanness, not score"
+        );
         assert_eq!(said(&message.friendliest), "have a nice day");
-        assert!((message.friendliest.as_ref().unwrap().score - 0.1).abs() < 1e-9);
+        assert_eq!(message.friendliest.as_ref().unwrap().meanness, Some(0.0));
         assert_eq!((voice.judged, voice.hostile), (1, 1));
-        assert!((voice.avg_score.unwrap() - 0.9).abs() < 1e-9);
+        assert!((voice.avg_meanness.unwrap() - 0.75).abs() < 1e-9);
         assert_eq!(said(&voice.meanest), "you're the worst");
         assert_eq!(said(&voice.friendliest), "you're the worst");
         let unknown = &db.user_sources(1, 8).await.unwrap()[0];
@@ -581,14 +635,79 @@ mod tests {
             (unknown.source.as_str(), said(&unknown.meanest)),
             ("?", "other".into())
         );
+        assert_eq!(unknown.avg_meanness, None, "nothing rated yet");
         assert!(db.user_sources(1, 9).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unrated_judgements_get_rated() {
+        let db = Db::connect("sqlite::memory:").await.unwrap();
+        let day = d("2026-11-06");
+        let entries = [
+            (
+                1,
+                Log::new(kind::JUDGED, json!({"said": "old", "score": 0.9})),
+            ),
+            (2, Log::new(kind::JUDGED, json!({"said": "elsewhere"}))),
+            (
+                1,
+                Log::new(kind::JUDGED, json!({"said": "new", "meanness": 0.5})),
+            ),
+            (1, Log::new(kind::HOSTILE, json!({"said": "old"}))),
+        ];
+        for (g, log) in &entries {
+            db.log_activity(*g, log, day).await.unwrap();
+        }
+        let unrated = db.unrated().await.unwrap();
+        let ids: Vec<_> = unrated.iter().map(|r| (r.id, r.guild_id)).collect();
+        assert_eq!(ids, [(1, 1), (2, 2)], "judged and unrated, every guild");
+
+        db.set_meanness(1, 0.75).await.unwrap();
+        let rows = db.activity(1, 0, 10).await.unwrap();
+        let data: Value = serde_json::from_str(&rows[0].data).unwrap();
+        assert_eq!(data, json!({"said": "old", "score": 0.9, "meanness": 0.75}));
+        assert_eq!(db.unrated().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn heard_before_is_the_channel_newest_first() {
+        let db = Db::connect("sqlite::memory:").await.unwrap();
+        let day = d("2026-11-06");
+        let heard = |text: &str, user, channel| {
+            Log::new(kind::HEARD, json!({"text": text}))
+                .user(UserId::new(user))
+                .channel(ChannelId::new(channel))
+        };
+        for log in [
+            heard("too old", 7, 9),
+            heard("hi", 7, 9),
+            heard("", 8, 9),
+            heard("other channel", 8, 5),
+            heard("yo", 8, 9),
+            heard("after", 8, 9),
+        ] {
+            db.log_activity(1, &log, day).await.unwrap();
+        }
+        sqlx::query("UPDATE activity_log SET at = '2000-01-01T00:00:00.000Z' WHERE id = 1")
+            .execute(&db.0)
+            .await
+            .unwrap();
+        let lines = db
+            .heard_before(1, 9, 6, "2001-01-01T00:00:00.000Z")
+            .await
+            .unwrap();
+        let said: Vec<_> = lines.iter().map(|(u, t, _)| (*u, t.as_str())).collect();
+        assert_eq!(said, [(Some(8), "yo"), (Some(7), "hi")]);
+        assert!(db.heard_before(2, 9, 6, "").await.unwrap().is_empty());
     }
 
     #[test]
     fn highlight_from_judged_json() {
         assert!(SaidHighlight::from_judged_data("nope").is_none());
-        let h = SaidHighlight::from_judged_data(r#"{"said":"hi","score":0.25}"#).unwrap();
+        let h = SaidHighlight::from_judged_data(r#"{"said":"hi","meanness":0.25}"#).unwrap();
         assert_eq!(h.said, "hi");
-        assert!((h.score - 0.25).abs() < 1e-9);
+        assert_eq!(h.meanness, Some(0.25));
+        let unrated = SaidHighlight::from_judged_data(r#"{"said":"hi","score":0.9}"#).unwrap();
+        assert_eq!(unrated.meanness, None);
     }
 }

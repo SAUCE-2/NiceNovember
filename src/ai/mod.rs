@@ -6,7 +6,10 @@ use poise::serenity_prelude::Message;
 use serde_json::{Value, json};
 
 use crate::app::Data;
-use crate::hostility::{AIMED, PUT_DOWN, STAMP, Source, Utterance, Verdict, questions};
+use crate::hostility::{
+    self, AIMED, MEANNESS, PUT_DOWN, STAMP, Source, Utterance, Verdict, meanness_question,
+    questions,
+};
 use jev::{Answers, Image, Jev, normalize_image};
 
 /// Max images per message sent to Jev (keeps requests small and fast).
@@ -141,10 +144,26 @@ async fn ask_verdict(
     verdict_from(&answers)
 }
 
+/// Ask Jev only how mean what was said is, 0 to 1: for utterances judged before it was asked.
+pub async fn rate_meanness(
+    jev: &Jev,
+    state: Value,
+    images: Vec<Image>,
+    source: Source,
+) -> anyhow::Result<f32> {
+    let answers = jev.ask(state, [meanness_question(source)], images).await?;
+    meanness_from(&answers)
+}
+
+fn meanness_from(answers: &Answers) -> anyhow::Result<f32> {
+    Ok(hostility::meanness(answers.score(MEANNESS)?))
+}
+
 fn verdict_from(answers: &Answers) -> anyhow::Result<Verdict> {
     Ok(Verdict {
         aimed: answers.noul(AIMED)?,
         put_down: answers.noul(PUT_DOWN)?,
+        meanness: meanness_from(answers)?,
     })
 }
 
@@ -232,22 +251,34 @@ mod tests {
     }
 
     #[test]
-    fn verdict_reads_both_answers() {
+    fn verdict_reads_every_answer() {
         let answers =
             |a: Value| serde_json::from_value::<Answers>(json!({ "answers": a })).unwrap();
-        let both = answers(json!({
+        let meanness = json!({ "type": "score", "score": 3.0, "confidence": 0.9 });
+        let all = answers(json!({
             "aimed": { "type": "noul", "noul": 0.2 },
             "put_down": { "type": "noul", "noul": 0.9 },
+            "meanness": meanness,
         }));
         assert_eq!(
-            verdict_from(&both).unwrap(),
+            verdict_from(&all).unwrap(),
             Verdict {
                 aimed: 0.2,
-                put_down: 0.9
+                put_down: 0.9,
+                meanness: 0.75,
             }
         );
         let one = answers(json!({ "aimed": { "type": "noul", "noul": 0.2 } }));
         assert!(verdict_from(&one).is_err());
+        let unrated = answers(json!({
+            "aimed": { "type": "noul", "noul": 0.2 },
+            "put_down": { "type": "noul", "noul": 0.9 },
+        }));
+        assert!(verdict_from(&unrated).is_err());
+        assert_eq!(
+            meanness_from(&answers(json!({ "meanness": meanness }))).unwrap(),
+            0.75
+        );
     }
 
     fn attachment(content_type: Option<&str>, size: u32, url: &str) -> Attachment {
@@ -406,9 +437,10 @@ mod live {
             let v = v.unwrap();
             let score = v.score();
             println!(
-                "{score:.2} (aimed {:.2}, put-down {:.2}) {said} (after {} lines)",
+                "{score:.2} (aimed {:.2}, put-down {:.2}, meanness {:.2}) {said} (after {} lines)",
                 v.aimed,
                 v.put_down,
+                v.meanness,
                 before.len()
             );
             if is_hostile(score, DEFAULT_THRESHOLD) != not_nice {

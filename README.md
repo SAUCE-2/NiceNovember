@@ -46,6 +46,7 @@ Everything that happens is logged, so you can build stats from it at the end of 
 | Who | Participants only (the participant role) | Participants in the monitored channel |
 | What's judged | Every new message (with the recent conversation in the channel and the message it replies to), edits that change the text (with the conversation before the message), and reactions on someone else's message (with that message) | Each thing they say, with the recent conversation: audio is cut when they go quiet for 0.8s (or after 15s) and transcribed locally |
 | Not nice when | Jev's score (the lower of how sure it is that it's aimed at someone and that it's a put-down) is at or above the threshold (default 0.7, set with `/nice setup threshold:`) | Same |
+| How not nice | Every judged thing is also rated on how not nice it was (its *not niceness*, 0–100%, from friendly or neutral, through a gentle jab, a put-down that stings and harsh and personal, to cruel or hateful), for the `/stats` cards. Things judged before this rating existed are rated once, on the next start, with their conversation as Discord and the activity log still have it | Same |
 | Then | 10s timeout, quote in the announce channel with how sure Jev is that it was hostile (e.g. `87% sure it's hostile`, a likelihood, not how hostile it was) | Same, and server-muted and deafened until it ends |
 
 **Why not Discord's timeout?** Discord won't let a bot time out the server owner, anyone with
@@ -81,7 +82,7 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
-| `/stats <user>` | Top Trumps card: meanest/friendliest lines and hostility per source, plus timeouts (posted in-channel) |
+| `/stats <user>` | Top Trumps card: meanest/friendliest lines and average not niceness (as a %) per source, how many weren't nice, plus timeouts (posted in-channel) |
 | `/log summary` | How much has been logged, by kind (admin) |
 | `/log dashboard` | A link to the [dashboard](#dashboard): everyone's log, person by person, live (admin) |
 | `/log export` | Download the activity log as gzipped JSON Lines (admin) |
@@ -217,9 +218,9 @@ whether the user was a participant at the time, the day (in `BOT_TZ`), a UTC tim
 | `typing`, `command`, `thread_create` | Who typed where, which slash command was used, new threads |
 | `member_seen` / `member_join` / `member_leave` / `member_update` | Names, nick and roles (snapshot at startup, then changes) |
 | `heard` | A participant's transcribed speech: `text`, Whisper's `raw` output, `audio_ms`, `transcribe_ms` |
-| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `aimed` and `put_down` (Jev's two answers; `score` is the lower), `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, `context_lines` (how much of the conversation it was judged with), and for voice `in_call` |
+| `judged` | A Jev verdict: `source` (message/edit/voice/reaction), `said`, `score`, `aimed` and `put_down` (Jev's two answers; `score` is the lower), `meanness` (not niceness, 0 to 1; added on the next start to entries from before it was asked), `hostile`, `threshold`, `shadow`, `jev_ms`, `images`, `context_lines` (how much of the conversation it was judged with), and for voice `in_call` |
 | `judge_failed` | Jev couldn't be reached, so it wasn't judged |
-| `hostile` | Something hostile: what was `said`, `score`, `aimed`, `put_down`, `muted` (server-muted and deafened), `announced` |
+| `hostile` | Something hostile: what was `said`, `score`, `aimed`, `put_down`, `meanness`, `muted` (server-muted and deafened), `announced` |
 | `timed_out` / `timeout_released` | Each timeout: `secs`, `until`, `muted`; and when it was lifted |
 | `timeout_message` / `timeout_reaction` / `timeout_vc` | Tried to talk, react or join VC while timed out |
 | `pardoned` | An admin ended a timeout early (`by`) |
@@ -256,8 +257,8 @@ with SQLite's JSON functions. Some ideas:
 SELECT user_id, COUNT(*) FROM activity_log
 WHERE kind = 'hostile' GROUP BY user_id ORDER BY 2 DESC;
 
--- Average hostility score per person, chat vs voice
-SELECT user_id, json_extract(data, '$.source') AS source, AVG(json_extract(data, '$.score')), COUNT(*)
+-- Average not niceness per person, chat vs voice
+SELECT user_id, json_extract(data, '$.source') AS source, AVG(json_extract(data, '$.meanness')), COUNT(*)
 FROM activity_log WHERE kind = 'judged' GROUP BY 1, 2 ORDER BY 3 DESC;
 
 -- Who talks most in VC (minutes of speech heard)

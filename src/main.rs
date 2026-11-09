@@ -8,6 +8,7 @@ mod events;
 mod hostility;
 mod judge;
 mod participant;
+mod rate;
 mod scheduler;
 mod setup;
 mod stats;

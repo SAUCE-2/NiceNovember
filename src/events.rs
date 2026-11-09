@@ -83,7 +83,11 @@ const CHAT_WINDOW: TimeDelta = TimeDelta::minutes(30);
 const CHAT_LINES: u8 = 10;
 
 /// The conversation before `message` in `channel`. Empty if Discord won't say (logged).
-async fn chat_before(ctx: &serenity::Context, channel: ChannelId, message: MessageId) -> Vec<Line> {
+pub async fn chat_before(
+    ctx: &serenity::Context,
+    channel: ChannelId,
+    message: MessageId,
+) -> Vec<Line> {
     let latest = GetMessages::new().before(message).limit(CHAT_LINES);
     match channel.messages(ctx, latest).await {
         Ok(msgs) => chat_lines(&msgs, message),
