@@ -2,6 +2,7 @@ mod ai;
 mod app;
 mod commands;
 mod config;
+mod dashboard;
 mod db;
 mod events;
 mod hostility;
@@ -80,6 +81,8 @@ async fn main() -> Result<()> {
                 }
                 tracing::info!("logged in as {}", ready.user.name);
                 scheduler::spawn_loops(ctx.clone(), data.clone());
+                let names = ctx.cache.clone();
+                tokio::spawn(dashboard::serve(cfg.dashboard_port, data.db.clone(), names));
                 Ok(data)
             })
         })
