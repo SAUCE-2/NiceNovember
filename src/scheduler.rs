@@ -1,4 +1,5 @@
-//! Background loops: releasing ended timeouts, and the voice monitor watchdog.
+//! Background work: loops releasing ended timeouts and watching the voice monitor, and rating the
+//! meanness of earlier judgements once at startup.
 
 use std::time::Duration;
 
@@ -6,10 +7,16 @@ use anyhow::Result;
 use poise::serenity_prelude as serenity;
 
 use crate::app::Data;
-use crate::timeout;
 use crate::voice::monitor;
+use crate::{rate, timeout};
 
 pub fn spawn_loops(ctx: serenity::Context, data: Data) {
+    let (c, d) = (ctx.clone(), data.clone());
+    tokio::spawn(async move {
+        if let Err(e) = rate::rate_unrated(&c, &d).await {
+            tracing::warn!("rating earlier judgements stopped: {e:#}");
+        }
+    });
     let (c, d) = (ctx.clone(), data.clone());
     tokio::spawn(every(Duration::from_secs(1), move || {
         let (c, d) = (c.clone(), d.clone());
