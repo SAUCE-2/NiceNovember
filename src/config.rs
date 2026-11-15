@@ -39,7 +39,7 @@ impl Config {
                 .context("DEV_GUILD_ID must be a number")?,
             database_url: var("DATABASE_URL")
                 .unwrap_or_else(|| "sqlite://data/nicenovember.db".into()),
-            whisper_model: var("WHISPER_MODEL").unwrap_or_else(|| "models/ggml-base.en.bin".into()),
+            whisper_model: var("WHISPER_MODEL").unwrap_or_else(|| "models/ggml-large-v3-turbo-q5_0.bin".into()),
             jev_api_key: var("JEV_API_KEY"),
             tz: var("BOT_TZ")
                 .unwrap_or_else(|| "Europe/London".into())

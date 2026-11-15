@@ -57,7 +57,7 @@ pub fn to_f32(pcm: &[i16]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     /// Needs a real model + 16 kHz mono WAV:
-    /// STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav cargo test -- --ignored
+    /// STT_TEST_MODEL=models/ggml-large-v3-turbo-q5_0.bin STT_TEST_WAV=models/jfk.wav cargo test -- --ignored
     #[tokio::test]
     #[ignore]
     async fn transcribes_wav() {
