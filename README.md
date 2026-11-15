@@ -299,7 +299,7 @@ The live tests are ignored by default. With a Whisper model and a 16 kHz mono WA
 `samples/jfk.wav` from whisper.cpp), this streams the WAV through the voice pipeline in 20 ms ticks:
 
 ```bash
-STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav ./dev.sh cargo test -- --ignored --nocapture
+STT_TEST_MODEL=models/ggml-large-v3-turbo-q5_0.bin STT_TEST_WAV=models/jfk.wav ./dev.sh cargo test -- --ignored --nocapture
 ```
 
 `deploy/steam-machine/test.sh` checks the install script against a fake Podman and systemd, and

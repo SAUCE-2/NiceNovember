@@ -5,7 +5,7 @@ pub mod stt;
 
 /// The live voice path on real speech: 20 ms ticks through the segmenter with the production
 /// limits, then Whisper on each segment. Needs a model and a 16 kHz mono WAV:
-/// `STT_TEST_MODEL=models/ggml-base.en.bin STT_TEST_WAV=models/jfk.wav cargo test real_speech -- --ignored --nocapture`
+/// `STT_TEST_MODEL=models/ggml-large-v3-turbo-q5_0.bin STT_TEST_WAV=models/jfk.wav cargo test real_speech -- --ignored --nocapture`
 #[cfg(test)]
 mod tests {
     use super::segmenter::{Limits, Segmenter};
