@@ -27,5 +27,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 whisper-rs = "0.16"
 
+[features]
+# Runs Whisper on the GPU through Vulkan. The Docker image is built with it; plain `cargo build`
+# (CI, local dev) stays CPU-only, so it needs no Vulkan SDK or glslc.
+gpu = ["whisper-rs/vulkan"]
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

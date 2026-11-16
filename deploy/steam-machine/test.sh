@@ -53,7 +53,7 @@ grep -qx 'DASHBOARD_URL=http://steampc:8080' "$HOME/nicenovember/.env" || fail "
 quadlet=$XDG_CONFIG_HOME/containers/systemd/nicenovember.container
 for line in Image=ghcr.io/sauce-2/nicenovember:latest ContainerName=nicenovember \
   "EnvironmentFile=$HOME/nicenovember/.env" Volume=nicenovember-data:/data PublishPort=8080:8080 \
-  AutoUpdate=registry \
+  AutoUpdate=registry AddDevice=-/dev/dri/renderD128 \
   Restart=always WantedBy=default.target; do
   grep -qx -- "$line" "$quadlet" || fail "$quadlet lacks $line"
 done
