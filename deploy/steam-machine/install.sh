@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install NiceNovember on a Steam Machine (SteamOS), or any Linux box with rootless Podman 4.4+ and
+# Install NiceNovember on a Steam Machine (SteamOS), or any Linux box with rootless Podman 4.5.1+ and
 # systemd. The bot runs from its GHCR image as a Quadlet service, and podman-auto-update keeps it
 # on the latest image (Watchtower can't recreate containers under Podman: "cannot set memory
 # swappiness with cgroupv2").
