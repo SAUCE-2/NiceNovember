@@ -83,7 +83,7 @@ Anyone can use the read-only commands. Everything else needs **Administrator**.
 | `/nice pardon <user>` | End someone's timeout early |
 | `/nice recent [count]` | The latest hostile things people said |
 | `/status` | Uptime, latency, memory, whether it's listening, and how much was heard, judged and timed out |
-| `/stats <user>` | Top Trumps card: top 5 meanest and friendliest lines and average not niceness (as a %) per source, how many weren't nice, plus timeouts (posted in-channel) |
+| `/stats <user>` | Top Trumps card: meanest and friendliest lines (each with a close honourable mention) and average not niceness (as a %) per source, how many weren't nice, plus timeouts (posted in-channel) |
 | `/log summary` | How much has been logged, by kind (admin) |
 | `/log dashboard` | A link to the [dashboard](#dashboard): everyone's log, person by person, live (admin) |
 | `/log export` | Download the activity log as gzipped JSON Lines (admin) |
