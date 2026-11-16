@@ -164,16 +164,56 @@ pub struct SourceStats {
     /// Average meanness, 0 to 1, of the judged utterances rated so far.
     pub avg_meanness: Option<f64>,
     pub hostile: i64,
-    /// The [`HIGHLIGHTS`] meanest judged utterances from this source, meanest first.
+    /// The meanest judged utterance from this source, and an honourable mention.
     #[sqlx(skip)]
-    pub meanest: Vec<SaidHighlight>,
-    /// The [`HIGHLIGHTS`] least mean judged utterances from this source, friendliest first.
+    pub meanest: Option<Highlights>,
+    /// The least mean judged utterance from this source, and an honourable mention.
     #[sqlx(skip)]
-    pub friendliest: Vec<SaidHighlight>,
+    pub friendliest: Option<Highlights>,
 }
 
-/// How many meanest and friendliest utterances `/stats` shows per source.
-pub const HIGHLIGHTS: i64 = 5;
+/// How many of the meanest (or friendliest) utterances an honourable mention is picked from.
+const MENTION_POOL: i64 = 10;
+
+/// How close, in meanness, a runner-up must be to the top utterance to be in the running for
+/// the honourable mention.
+pub const MENTION_TOLERANCE: f64 = 0.05;
+
+/// The top utterance at one end of the meanness scale, and an honourable mention close behind.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Highlights {
+    pub top: SaidHighlight,
+    pub mention: Option<SaidHighlight>,
+}
+
+impl Highlights {
+    /// Split a ranked pool (best first) into the top and an honourable mention: a random one of
+    /// the runners-up within [`MENTION_TOLERANCE`] of the top, or else the next best. `roll(n)`
+    /// picks an index below `n`.
+    pub fn pick(pool: Vec<SaidHighlight>, roll: impl FnOnce(usize) -> usize) -> Option<Self> {
+        let mut rest = pool.into_iter();
+        let top = rest.next()?;
+        let mut rest: Vec<_> = rest.collect();
+        let close = rest
+            .iter()
+            .take_while(|h| match (top.meanness, h.meanness) {
+                (Some(t), Some(m)) => (t - m).abs() <= MENTION_TOLERANCE + 1e-9,
+                _ => false,
+            })
+            .count();
+        let mention = match close {
+            0 if rest.is_empty() => None,
+            0 => Some(rest.swap_remove(0)),
+            n => Some(rest.swap_remove(roll(n) % n)),
+        };
+        Some(Self { top, mention })
+    }
+}
+
+/// A random index below `n`.
+fn random_below(n: usize) -> usize {
+    getrandom::u64().map_or(0, |r| (r % n as u64) as usize)
+}
 
 /// One judged utterance, for Top Trumps highlights on the `/stats` card.
 #[derive(Clone, Debug, PartialEq)]
@@ -259,8 +299,8 @@ impl Db {
         .await?)
     }
 
-    /// How one user's utterances were judged, per source (most judged first), with the
-    /// [`HIGHLIGHTS`] meanest and friendliest things they said from each.
+    /// How one user's utterances were judged, per source (most judged first), with the meanest
+    /// and friendliest things they said from each.
     pub async fn user_sources(&self, guild_id: u64, user_id: u64) -> Result<Vec<SourceStats>> {
         let mut sources: Vec<SourceStats> = sqlx::query_as(concat!(
             "SELECT ",
@@ -279,17 +319,19 @@ impl Db {
         .fetch_all(&self.0)
         .await?;
         for s in &mut sources {
-            s.meanest = self
+            let meanest = self
                 .judged_by_meanness(guild_id, user_id, &s.source, true)
                 .await?;
-            s.friendliest = self
+            s.meanest = Highlights::pick(meanest, random_below);
+            let friendliest = self
                 .judged_by_meanness(guild_id, user_id, &s.source, false)
                 .await?;
+            s.friendliest = Highlights::pick(friendliest, random_below);
         }
         Ok(sources)
     }
 
-    /// The [`HIGHLIGHTS`] meanest (or least mean) judged utterances, rated ones first, ties going
+    /// The [`MENTION_POOL`] meanest (or least mean) judged utterances, rated ones first, ties going
     /// to Jev's score and then the latest.
     async fn judged_by_meanness(
         &self,
@@ -310,7 +352,7 @@ impl Db {
         .bind(user_id as i64)
         .bind(source)
         .bind(if meanest { -1 } else { 1 })
-        .bind(HIGHLIGHTS)
+        .bind(MENTION_POOL)
         .fetch_all(&self.0)
         .await?;
         Ok(rows
@@ -619,7 +661,10 @@ mod tests {
         assert_eq!(s.timed_out, 2);
         assert_eq!(s.timeout_secs, 180);
 
-        let said = |hs: &[SaidHighlight]| hs.iter().map(|h| h.said.clone()).collect::<Vec<_>>();
+        fn said(h: &Option<Highlights>) -> (&str, Option<&str>) {
+            let h = h.as_ref().unwrap();
+            (&h.top.said, h.mention.as_ref().map(|m| m.said.as_str()))
+        }
         let by_source = db.user_sources(1, 7).await.unwrap();
         let sources: Vec<_> = by_source.iter().map(|s| s.source.as_str()).collect();
         assert_eq!(sources, ["message", "voice"], "most judged first");
@@ -628,42 +673,80 @@ mod tests {
         assert!((message.avg_meanness.unwrap() - 0.25).abs() < 1e-9);
         assert_eq!(
             said(&message.meanest),
-            ["ok genius", "meh", "have a nice day", "not rated yet"],
-            "by meanness, not score, unrated last"
+            ("ok genius", Some("meh")),
+            "by meanness, not score"
         );
+        assert_eq!(said(&message.friendliest), ("have a nice day", Some("meh")));
         assert_eq!(
-            said(&message.friendliest),
-            ["have a nice day", "meh", "ok genius", "not rated yet"]
+            message.friendliest.as_ref().unwrap().top.meanness,
+            Some(0.0)
         );
-        assert_eq!(message.friendliest[0].meanness, Some(0.0));
         assert_eq!((voice.judged, voice.hostile), (1, 1));
         assert!((voice.avg_meanness.unwrap() - 0.75).abs() < 1e-9);
-        assert_eq!(said(&voice.meanest), ["you're the worst"]);
-        assert_eq!(said(&voice.friendliest), ["you're the worst"]);
+        assert_eq!(said(&voice.meanest), ("you're the worst", None));
+        assert_eq!(said(&voice.friendliest), ("you're the worst", None));
         let unknown = &db.user_sources(1, 8).await.unwrap()[0];
         assert_eq!(
             (unknown.source.as_str(), said(&unknown.meanest)),
-            ("?", vec!["other".to_owned()])
+            ("?", ("other", None))
         );
         assert_eq!(unknown.avg_meanness, None, "nothing rated yet");
         assert!(db.user_sources(1, 9).await.unwrap().is_empty());
     }
 
-    #[tokio::test]
-    async fn highlights_are_the_top_five() {
-        let db = Db::connect("sqlite::memory:").await.unwrap();
-        for i in 0..7 {
-            let data = json!({
-                "said": i.to_string(), "score": 0.5, "source": "message",
-                "meanness": f64::from(i) / 10.0,
-            });
-            let log = Log::new(kind::JUDGED, data).user(UserId::new(7));
-            db.log_activity(1, &log, d("2026-11-06")).await.unwrap();
-        }
-        let s = &db.user_sources(1, 7).await.unwrap()[0];
-        let said = |hs: &[SaidHighlight]| hs.iter().map(|h| h.said.clone()).collect::<Vec<_>>();
-        assert_eq!(said(&s.meanest), ["6", "5", "4", "3", "2"]);
-        assert_eq!(said(&s.friendliest), ["0", "1", "2", "3", "4"]);
+    fn pool(meanness: &[Option<f64>]) -> Vec<SaidHighlight> {
+        meanness
+            .iter()
+            .enumerate()
+            .map(|(i, &meanness)| SaidHighlight {
+                said: i.to_string(),
+                meanness,
+            })
+            .collect()
+    }
+
+    /// The top and mention a pool's pick ends up with, by index in the pool.
+    fn picked(meanness: &[Option<f64>], roll: usize) -> Option<(String, Option<String>)> {
+        Highlights::pick(pool(meanness), |n| {
+            assert!(roll < n, "rolled {roll} of {n}");
+            roll
+        })
+        .map(|h| (h.top.said, h.mention.map(|m| m.said)))
+    }
+
+    fn top_and(mention: Option<&str>) -> Option<(String, Option<String>)> {
+        Some(("0".into(), mention.map(Into::into)))
+    }
+
+    #[test]
+    fn mention_is_the_runner_up_when_none_are_close() {
+        assert_eq!(picked(&[], 0), None);
+        assert_eq!(picked(&[Some(0.9)], 0), top_and(None));
+        assert_eq!(
+            picked(&[Some(0.9), Some(0.5), Some(0.4)], 0),
+            top_and(Some("1"))
+        );
+        assert_eq!(picked(&[Some(0.9), None], 0), top_and(Some("1")));
+        assert_eq!(picked(&[None, None], 0), top_and(Some("1")));
+    }
+
+    #[test]
+    fn mention_is_any_runner_up_within_tolerance() {
+        let close = [Some(0.9), Some(0.88), Some(0.85), Some(0.84), Some(0.2)];
+        assert_eq!(picked(&close, 0), top_and(Some("1")));
+        assert_eq!(
+            picked(&close, 1),
+            top_and(Some("2")),
+            "exactly on the tolerance"
+        );
+        let mut candidates = 0;
+        Highlights::pick(pool(&close), |n| {
+            candidates = n;
+            0
+        });
+        assert_eq!(candidates, 2, "0.84 is too far behind");
+        let friendly = [Some(0.0), Some(0.03), Some(0.06)];
+        assert_eq!(picked(&friendly, 0), top_and(Some("1")));
     }
 
     #[tokio::test]
