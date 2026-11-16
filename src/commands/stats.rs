@@ -11,11 +11,15 @@ use poise::serenity_prelude::{
 /// Discord's upload limit for servers without boosts is 10 MiB.
 const MAX_UPLOAD: usize = 9_500_000;
 
+/// How much of each highlight the `/stats` card quotes, so a full card fits in one embed
+/// description (4096 characters).
+const QUOTE_CHARS: usize = 60;
+
 fn guild(ctx: Ctx<'_>) -> Result<serenity::GuildId> {
     ctx.guild_id().context("use this in a server")
 }
 
-/// Top Trumps card for a user: meanest/nicest lines and not niceness per source, plus timeouts.
+/// Top Trumps card for a user: top meanest/nicest lines and not niceness per source, plus timeouts.
 #[poise::command(slash_command, guild_only)]
 pub async fn stats(
     ctx: Ctx<'_>,
@@ -181,11 +185,10 @@ fn format_user_card(s: &UserStats, sources: &[SourceStats]) -> String {
         let avg = src.avg_meanness.map_or_else(|| "—".into(), percent);
         let _ = write!(
             text,
-            "**{}**\nMeanest thing: {}\nFriendliest thing: {}\n\
-             Not niceness: avg {avg} · {} not nice of {} judged\n\n",
+            "**{}**\n{}{}Not niceness: avg {avg} · {} not nice of {} judged\n\n",
             src.source,
-            format_highlight(src.meanest.as_ref()),
-            format_highlight(src.friendliest.as_ref()),
+            format_highlights("Meanest things", &src.meanest),
+            format_highlights("Friendliest things", &src.friendliest),
             src.hostile,
             src.judged
         );
@@ -199,11 +202,23 @@ fn format_user_card(s: &UserStats, sources: &[SourceStats]) -> String {
     text
 }
 
-fn format_highlight(h: Option<&SaidHighlight>) -> String {
-    let Some(h) = h else {
-        return "—".into();
-    };
-    let said: String = h.said.chars().take(100).collect();
+/// A titled, numbered list of highlights, or a dash when there are none.
+fn format_highlights(title: &str, highlights: &[SaidHighlight]) -> String {
+    if highlights.is_empty() {
+        return format!("{title}: —\n");
+    }
+    let mut text = format!("{title}:\n");
+    for (i, h) in highlights.iter().enumerate() {
+        let _ = writeln!(text, "{}. {}", i + 1, format_highlight(h));
+    }
+    text
+}
+
+fn format_highlight(h: &SaidHighlight) -> String {
+    let mut said: String = h.said.chars().take(QUOTE_CHARS).collect();
+    if h.said.chars().nth(QUOTE_CHARS).is_some() {
+        said.push('…');
+    }
     match h.meanness {
         Some(m) => format!("\"{said}\" ({} not nice)", percent(m)),
         None => format!("\"{said}\""),
@@ -239,6 +254,9 @@ fn fmt_secs(secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The most characters Discord takes in an embed description.
+    const EMBED_DESCRIPTION_CHARS: usize = 4096;
 
     #[test]
     fn kind_counts_text() {
@@ -294,11 +312,9 @@ mod tests {
             timed_out: 2,
             timeout_secs: 180,
         };
-        let said = |said: &str, meanness| {
-            Some(SaidHighlight {
-                said: said.into(),
-                meanness,
-            })
+        let said = |said: &str, meanness| SaidHighlight {
+            said: said.into(),
+            meanness,
         };
         let sources = [
             SourceStats {
@@ -306,29 +322,73 @@ mod tests {
                 judged: 3,
                 avg_meanness: Some(0.42),
                 hostile: 1,
-                meanest: said("you're the worst", Some(0.75)),
-                friendliest: said("have a nice day", None),
+                meanest: vec![said("you're the worst", Some(0.75)), said("meh", Some(0.2))],
+                friendliest: vec![said("have a nice day", None)],
             },
             SourceStats {
                 source: "edit".into(),
                 judged: 0,
                 avg_meanness: None,
                 hostile: 0,
-                meanest: None,
-                friendliest: None,
+                meanest: vec![],
+                friendliest: vec![],
             },
         ];
         assert_eq!(
             format_user_card(&s, &sources),
             "**voice**\n\
-             Meanest thing: \"you're the worst\" (75% not nice)\n\
-             Friendliest thing: \"have a nice day\"\n\
+             Meanest things:\n\
+             1. \"you're the worst\" (75% not nice)\n\
+             2. \"meh\" (20% not nice)\n\
+             Friendliest things:\n\
+             1. \"have a nice day\"\n\
              Not niceness: avg 42% · 1 not nice of 3 judged\n\n\
              **edit**\n\
-             Meanest thing: —\n\
-             Friendliest thing: —\n\
+             Meanest things: —\n\
+             Friendliest things: —\n\
              Not niceness: avg — · 0 not nice of 0 judged\n\n\
              **Timeouts:** 2 (3m)"
         );
+    }
+
+    #[test]
+    fn long_highlights_are_cut() {
+        let long = SaidHighlight {
+            said: "a".repeat(200),
+            meanness: Some(1.0),
+        };
+        assert_eq!(
+            format_highlights("Meanest things", &[long]),
+            format!(
+                "Meanest things:\n1. \"{}…\" (100% not nice)\n",
+                "a".repeat(QUOTE_CHARS)
+            )
+        );
+    }
+
+    #[test]
+    fn a_full_card_fits_in_an_embed() {
+        let highlights = vec![
+            SaidHighlight {
+                said: "a".repeat(500),
+                meanness: Some(1.0),
+            };
+            crate::stats::HIGHLIGHTS as usize
+        ];
+        let sources: Vec<_> = ["message", "edit", "voice", "reaction"]
+            .map(|source| SourceStats {
+                source: source.into(),
+                judged: i64::MAX,
+                avg_meanness: Some(1.0),
+                hostile: i64::MAX,
+                meanest: highlights.clone(),
+                friendliest: highlights.clone(),
+            })
+            .into();
+        let s = UserStats {
+            timed_out: i64::MAX,
+            timeout_secs: i64::MAX,
+        };
+        assert!(format_user_card(&s, &sources).chars().count() <= EMBED_DESCRIPTION_CHARS);
     }
 }
