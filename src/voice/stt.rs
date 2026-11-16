@@ -33,6 +33,7 @@ impl Stt {
         let _permit = self.permits.acquire().await?;
         let ctx = self.ctx.clone();
         tokio::task::spawn_blocking(move || {
+            let started = std::time::Instant::now();
             let audio = to_f32(&pcm);
             let mut state = ctx.create_state()?;
             let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -44,6 +45,11 @@ impl Stt {
             params.set_print_timestamps(false);
             state.full(params, &audio)?;
             let text: Vec<String> = state.as_iter().map(|seg| seg.to_string()).collect();
+            tracing::debug!(
+                audio_ms = pcm.len() / 16,
+                took_ms = started.elapsed().as_millis() as u64,
+                "transcribed"
+            );
             Ok(text.join(" ").trim().to_owned())
         })
         .await?

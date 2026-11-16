@@ -69,6 +69,9 @@ ContainerName=nicenovember
 EnvironmentFile=$DIR/.env
 Volume=nicenovember-data:/data
 PublishPort=$PORT:8080
+# The GPU, for Whisper (Vulkan). The leading - skips it on machines without one; the bot then
+# transcribes on the CPU.
+AddDevice=-/dev/dri/renderD128
 AutoUpdate=registry
 
 [Service]
