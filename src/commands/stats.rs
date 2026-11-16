@@ -185,7 +185,7 @@ fn format_user_card(s: &UserStats, sources: &[SourceStats]) -> String {
         let avg = src.avg_meanness.map_or_else(|| "—".into(), percent);
         let _ = write!(
             text,
-            "**{}**\n{}{}Not niceness: avg {avg} · {} not nice of {} judged\n\n",
+            "**{}**\n{}{}**Not niceness:** avg {avg} · {} not nice of {} judged\n\n",
             src.source,
             format_highlights("Meanest thing", src.meanest.as_ref()),
             format_highlights("Friendliest thing", src.friendliest.as_ref()),
@@ -205,11 +205,11 @@ fn format_user_card(s: &UserStats, sources: &[SourceStats]) -> String {
 /// The top highlight and its honourable mention, or a dash when there's nothing.
 fn format_highlights(title: &str, highlights: Option<&Highlights>) -> String {
     let Some(h) = highlights else {
-        return format!("{title}: —\n");
+        return format!("**{title}:** —\n");
     };
-    let mut text = format!("{title}: {}\n", format_highlight(&h.top));
+    let mut text = format!("**{title}:** {}\n", format_highlight(&h.top));
     if let Some(m) = &h.mention {
-        let _ = writeln!(text, "Honourable mention: {}", format_highlight(m));
+        let _ = writeln!(text, "**Honourable mention:** {}", format_highlight(m));
     }
     text
 }
@@ -343,14 +343,14 @@ mod tests {
         assert_eq!(
             format_user_card(&s, &sources),
             "**voice**\n\
-             Meanest thing: \"you're the worst\" (75% not nice)\n\
-             Honourable mention: \"ugh you\" (72% not nice)\n\
-             Friendliest thing: \"have a nice day\"\n\
-             Not niceness: avg 42% · 1 not nice of 3 judged\n\n\
+             **Meanest thing:** \"you're the worst\" (75% not nice)\n\
+             **Honourable mention:** \"ugh you\" (72% not nice)\n\
+             **Friendliest thing:** \"have a nice day\"\n\
+             **Not niceness:** avg 42% · 1 not nice of 3 judged\n\n\
              **edit**\n\
-             Meanest thing: —\n\
-             Friendliest thing: —\n\
-             Not niceness: avg — · 0 not nice of 0 judged\n\n\
+             **Meanest thing:** —\n\
+             **Friendliest thing:** —\n\
+             **Not niceness:** avg — · 0 not nice of 0 judged\n\n\
              **Timeouts:** 2 (3m)"
         );
     }
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(
             format_highlights("Meanest thing", Some(&highlights)),
             format!(
-                "Meanest thing: \"{}…\" (100% not nice)\n",
+                "**Meanest thing:** \"{}…\" (100% not nice)\n",
                 "a".repeat(QUOTE_CHARS)
             )
         );
