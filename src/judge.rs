@@ -75,7 +75,8 @@ pub async fn judge(
     }
 
     let reason = format!("hostile, jev {score:.2}: {}", u.said);
-    let applied = timeout::time_out(ctx, data, guild_id, u.user, &reason).await;
+    let applied =
+        timeout::time_out(ctx, data, guild_id, u.user, timeout::TIMEOUT_SECS, &reason).await;
     let announced = announce(ctx, &gcfg, &u, score).await;
     let (muted, error) = match &applied {
         Ok(a) => (a.muted, None),

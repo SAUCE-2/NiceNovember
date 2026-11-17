@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod dashboard;
 mod db;
+mod deafen;
 mod events;
 mod hostility;
 mod judge;
