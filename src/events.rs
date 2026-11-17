@@ -1,5 +1,6 @@
 //! Routes Discord events: everything is logged, timeouts are enforced, participants' messages,
-//! edits and reactions are judged, and the voice monitor is kept in its channel.
+//! edits and reactions are judged, the voice monitor is kept in its channel, and whoever
+//! deafens it is timed out.
 
 use anyhow::Result;
 use chrono::TimeDelta;
@@ -12,7 +13,7 @@ use crate::app::Data;
 use crate::hostility::{Line, Source, Utterance};
 use crate::participant::is_participant;
 use crate::voice::monitor;
-use crate::{judge, setup, stats, timeout};
+use crate::{deafen, judge, setup, stats, timeout};
 
 pub async fn handle(ctx: &serenity::Context, event: &FullEvent, data: &Data) -> Result<()> {
     // Log everything first, whatever happens next.
@@ -205,6 +206,7 @@ async fn on_voice(
     };
     let old_ch = old.and_then(|o| o.channel_id);
     if new.user_id == ctx.cache.current_user().id {
+        deafen::check(ctx, data, guild_id, old, new);
         // Moved or kicked out of the monitored channel: go back.
         if new.channel_id != data.monitor.listening_in(guild_id) {
             let (ctx, data) = (ctx.clone(), data.clone());

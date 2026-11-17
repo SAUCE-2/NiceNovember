@@ -27,15 +27,16 @@ pub struct Applied {
     pub muted: bool,
 }
 
-/// Time `user` out for [`TIMEOUT_SECS`].
+/// Time `user` out for `secs`.
 pub async fn time_out(
     ctx: &serenity::Context,
     data: &Data,
     guild_id: GuildId,
     user: UserId,
+    secs: u64,
     reason: &str,
 ) -> Result<Applied> {
-    let until = Utc::now() + Duration::from_secs(TIMEOUT_SECS);
+    let until = Utc::now() + Duration::from_secs(secs);
     data.db
         .start_timeout(guild_id.get(), user.get(), until)
         .await?;
@@ -44,14 +45,13 @@ pub async fn time_out(
     let log = Log::new(
         kind::TIMED_OUT,
         json!({
-            "secs": TIMEOUT_SECS,
+            "secs": secs,
             "until": applied.until,
             "reason": reason,
             "muted": applied.muted,
         }),
     )
-    .user(user)
-    .participant(Some(true));
+    .user(user);
     stats::record(data, guild_id, log).await;
     Ok(applied)
 }
@@ -226,7 +226,7 @@ pub async fn on_message(ctx: &serenity::Context, data: &Data, msg: &Message) -> 
     .channel(msg.channel_id);
     stats::record(data, guild_id, log).await;
     let notice = format!(
-        "⛔ <@{}> you're timed out for being hostile. Back <t:{}:R>.",
+        "⛔ <@{}> you're timed out. Back <t:{}:R>.",
         msg.author.id,
         until.timestamp()
     );
