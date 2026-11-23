@@ -18,7 +18,10 @@ Everything that happens is logged, so you can build stats from it at the end of 
   it, quoting a lyric, asking someone to stop something, or calling out something crude they said
   ("that's disgusting") is fine. A put-down aimed at someone
   isn't, even teasing, sarcasm or a joke between friends, and neither is using an identity as
-  the insult ("that's so gay" about a game).
+  the insult ("that's so gay" about a game). Dressing one up doesn't get it through either:
+  passing it on ("Michael said you're an idiot"), making it a hypothetical ("imagine if I called
+  you a loser"), adding "no offence", or telling the bot to rate it nice. Objecting to a put-down,
+  telling someone else what happened, or asking whether a word counts is fine.
 - **Always listening in voice.** The bot sits in one voice channel whenever anyone's in it (and
   leaves when it's empty), and transcribes each thing a participant says locally with
   [Whisper](https://github.com/ggerganov/whisper.cpp).
